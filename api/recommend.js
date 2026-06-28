@@ -251,234 +251,60 @@ function getReferenceCoordFromDistrict(district){
   return {lat,lng,district,areaGroup:getAreaGroup(district)};
 }
 function basisLabelFromContext(userContext={}){
-  if(userContext.mode === "reference" && userContext.basisPlaceName) return `${userContext.basisPlaceName} 기준`;
   if(userContext.basisDistrict) return `${userContext.basisDistrict} 기준`;
   if(userContext.mode === "district" && userContext.selectedAreaGroup) return `${userContext.selectedAreaGroup} 기준`;
   if(userContext.mode === "gps") return "현재 위치 기준";
   return "조건 기준";
 }
-
-function nearestDistrictFromCoord(lat,lng){
-  let nearest = null;
-  for(const [district, coord] of Object.entries(districtCoords || {})){
-    if(!coord || !Number.isFinite(Number(coord.lat)) || !Number.isFinite(Number(coord.lng))) continue;
-    const km = calcDistanceKm(Number(lat), Number(lng), Number(coord.lat), Number(coord.lng));
-    if(!nearest || km < nearest.km) nearest = {district, km, areaGroup:getAreaGroup(district)};
-  }
-  return nearest ? {...nearest, km:Number(nearest.km.toFixed(1))} : null;
-}
-function getFacilityCoord(f){
-  const lat = Number(f.lat ?? f.latitude);
-  const lng = Number(f.lng ?? f.longitude ?? f.lon);
-  if(Number.isFinite(lat) && Number.isFinite(lng)) return {lat,lng,source:"facility"};
-  const c = districtCoords?.[f.district];
-  if(c && Number.isFinite(Number(c.lat)) && Number.isFinite(Number(c.lng))){
-    return {lat:Number(c.lat), lng:Number(c.lng), source:"district"};
-  }
-  return null;
-}
-function looksLikeAddress(text){
-  const q = String(text || "");
-  return /(로|길|번길)\s*\d+/.test(q) || /(경기도|화성시).*(로|길|번길)/.test(q);
-}
-function extractAddressCandidate(message){
-  const msg = String(message || "").replace(/\s+/g," ").trim();
-  const match = msg.match(/((?:경기도\s*)?(?:화성시\s*)?[가-힣0-9\s·.-]{1,35}(?:로|길|번길)\s*\d+(?:-\d+)?)/);
-  if(!match) return null;
-  return match[1].replace(/^(근처|주변|인근)\s*/,"").trim();
-}
-function trimLocationPhrase(text){
-  return String(text || "")
-    .replace(/(근처|주변|인근|쪽|부근|앞|에서|으로|기준|근방)/g," ")
-    .replace(/(축구|풋살|운동|체육|도서관|공부|책|독서|아이|가족|어린이|갈만한|갈\s*만한|추천|찾아줘|하고\s*싶어|할\s*만한\s*곳|할만한곳|있어|좋은곳|곳)/g," ")
-    .replace(/\s{2,}/g," ")
-    .trim();
-}
-function extractPlaceCandidate(message){
-  const msg = String(message || "").replace(/\s+/g," ").trim();
-  const patterns = [
-    /(.{2,30}?)(?:\s*)(?:근처|주변|인근|부근|앞)/,
-    /(.{2,30}?)(?:\s*)(?:에서|쪽)(?:\s*)(?:축구|풋살|운동|도서관|공부|책|아이|가족|갈|추천|찾)/
-  ];
-  for(const p of patterns){
-    const m = msg.match(p);
-    if(m){
-      const cand = trimLocationPhrase(m[1]);
-      if(cand && cand.length >= 2 && !normalizeDistrictHint(cand) && !normalizeAreaHint(cand)){
-        return cand;
-      }
-    }
-  }
-  return null;
-}
-function localReferenceLocationHints(message, analysis={}, localHints={}){
-  const candidates = [];
-  const exactDistrict = firstDistrictFromTargets(localHints.explicitDistrictMentions || localHints.districts || []);
-  if(exactDistrict) return [];
-
-  const addr = extractAddressCandidate(message);
-  if(addr) candidates.push({text:addr, type:"address", source:"local_address"});
-
-  if(analysis.targetLocationText && analysis.targetLocationText !== "none"){
-    candidates.push({
-      text:analysis.targetLocationText,
-      type:analysis.targetLocationType || (looksLikeAddress(analysis.targetLocationText) ? "address" : "place"),
-      source:"ai"
-    });
-  }
-
-  const place = extractPlaceCandidate(message);
-  if(place) candidates.push({text:place, type:looksLikeAddress(place) ? "address" : "place", source:"local_place"});
-
-  return unique(candidates.map(c=>JSON.stringify(c))).map(s=>JSON.parse(s)).filter(c=>c.text && c.text.length >= 2);
-}
-async function kakaoLocalRequest(endpoint, params){
-  const key = process.env.KAKAO_REST_API_KEY;
-  if(!key) return null;
-  const url = new URL(`https://dapi.kakao.com/v2/local/search/${endpoint}.json`);
-  Object.entries(params || {}).forEach(([k,v])=>{
-    if(v !== undefined && v !== null && String(v).trim() !== "") url.searchParams.set(k,String(v));
-  });
-  const response = await fetch(url, {
-    headers:{ Authorization:`KakaoAK ${key}` }
-  });
-  if(!response.ok) return null;
-  return await response.json();
-}
-function kakaoDocToLocation(doc, query, type){
-  if(!doc) return null;
-  const lat = Number(doc.y);
-  const lng = Number(doc.x);
-  if(!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  const address = doc.road_address_name || doc.address_name || doc.address?.address_name || doc.road_address?.address_name || "";
-  const name = doc.place_name || query;
-  const nearest = nearestDistrictFromCoord(lat,lng);
-  const inBroadBox = lat >= 36.92 && lat <= 37.36 && lng >= 126.48 && lng <= 127.24;
-  const isHwaseong = /화성시/.test(address) || Boolean(inBroadBox && nearest && nearest.km <= 18);
-  return {
-    query,
-    name,
-    type,
-    lat,
-    lng,
-    address,
-    nearestDistrict:nearest?.district || null,
-    nearestAreaGroup:nearest?.areaGroup || null,
-    nearestDistanceKm:nearest?.km ?? null,
-    isHwaseong
-  };
-}
-async function searchKakaoAddress(query){
-  const variants = unique([query, query.includes("화성") ? query : `화성시 ${query}`, query.includes("경기도") ? query : `경기도 화성시 ${query}`]);
-  for(const q of variants){
-    const data = await kakaoLocalRequest("address", {query:q, size:5});
-    const docs = data?.documents || [];
-    const converted = docs.map(d=>kakaoDocToLocation(d,q,"address")).filter(Boolean);
-    const hwaseong = converted.find(x=>x.isHwaseong);
-    if(hwaseong) return hwaseong;
-    if(converted[0]) return converted[0];
-  }
-  return null;
-}
-function expandPlaceSearchVariants(query){
-  const q = String(query || "").trim();
-  const compact = q.replace(/\s/g,"");
-  const variants = [q];
-
-  // 학교 약칭 보강: 반월초 -> 반월초등학교, 안화고 -> 안화고등학교
-  if(/[가-힣0-9]+초$/.test(compact)) variants.push(compact.replace(/초$/,"초등학교"));
-  if(/[가-힣0-9]+중$/.test(compact)) variants.push(compact.replace(/중$/,"중학교"));
-  if(/[가-힣0-9]+고$/.test(compact)) variants.push(compact.replace(/고$/,"고등학교"));
-
-  // 이미 학교가 들어간 경우도 공백 제거 버전을 추가
-  if(/초등학교|중학교|고등학교|대학교|역|공원|센터|도서관/.test(compact)) variants.push(compact);
-
-  return unique(variants.filter(Boolean));
-}
-async function searchKakaoKeyword(query){
-  const baseVariants = expandPlaceSearchVariants(query);
-  const variants = unique(baseVariants.flatMap(v=>[
-    v,
-    v.includes("화성") ? v : `화성시 ${v}`,
-    v.includes("경기도") ? v : `경기도 화성시 ${v}`
-  ]));
-  for(const q of variants){
-    const data = await kakaoLocalRequest("keyword", {query:q, size:10});
-    const docs = data?.documents || [];
-    const converted = docs.map(d=>kakaoDocToLocation(d,q,"place")).filter(Boolean);
-    const hwaseong = converted.find(x=>x.isHwaseong && /화성시/.test(x.address));
-    if(hwaseong) return hwaseong;
-    const nearHwaseong = converted.find(x=>x.isHwaseong);
-    if(nearHwaseong) return nearHwaseong;
-  }
-  return null;
-}
-async function resolveKakaoLocation(message, analysis={}, localHints={}){
-  // v29-2.5 안정화: 지도/카카오 위치 검색은 일단 비활성화.
-  // 이유: 지도 검색 도입 후 추천 카드가 비거나 JSON 파싱/렌더링 문제가 잦아져
-  // 친구 테스트 전 단계에서는 자연어+읍면동+권역 추천만 안정화한다.
-  return null;
-}
-
-function resolveRecommendationContext(userContext={}, analysis={}, localHints={}, kakaoLocation=null){
+function resolveRecommendationContext(userContext={}, analysis={}, localHints={}){
   const gps = getGpsHwaseongStatus(userContext);
 
-  // 우선순위:
-  // 1) 정확한 읍면동
-  // 2) 카카오 Local API로 찾은 주소/장소 좌표
-  // 3) 권역/생활지명
-  // 4) 대화 맥락
-  // 5) 선택 권역
-  // 6) GPS
-  // 7) 목적 중심
+  // 우선순위 고정:
+  // 1) 현재 질문에서 직접 말한 정확한 읍면동
+  // 2) 현재 질문에서 직접 말한 화성 권역/생활지명
+  // 3) AI가 대화 맥락에서 잡은 집·목적지·가려는 곳
+  // 4) 사용자가 선택한 권역
+  // 5) GPS 현재 위치
+  // 6) 목적 중심
   const directDistrict = firstDistrictFromTargets(localHints.explicitDistrictMentions || localHints.explicitAreaMentions || localHints.districts || []);
   const aiDistrict = firstDistrictFromTargets(analysis.targetDistricts || []);
   const directArea = firstAreaFromTargets(localHints.explicitAreaMentions || localHints.districts || []);
   const aiArea = firstAreaFromTargets(analysis.targetDistricts || []);
   const selectedArea = normalizeAreaHint(userContext.selectedAreaGroup);
   const aiBasis = analysis.recommendationBasis || "purpose_only";
-  const aiAreaIsContextual = ["home_area","destination_area","mentioned_area","mentioned_district","reference_location"].includes(aiBasis);
+  const aiAreaIsContextual = ["home_area","destination_area","mentioned_area"].includes(aiBasis);
 
   if(directDistrict){
     const ref = getReferenceCoordFromDistrict(directDistrict);
     const area = getAreaGroup(directDistrict);
     return {
-      userContext:{...userContext, mode:"district", selectedAreaGroup:area, basisDistrict:directDistrict, basisPlaceName:null, referenceLat:ref?.lat, referenceLng:ref?.lng, lat:undefined, lng:undefined},
-      gpsStatus:gps, usedBasis:"mentioned_district", needsAreaClarification:false, areaGroup:area, basisDistrict:directDistrict, referenceLocation:null,
-      note:gps.hasGps ? "GPS보다 사용자가 현재 질문에서 직접 말한 읍면동을 우선" : "사용자가 현재 질문에서 직접 말한 읍면동 기준 추천"
-    };
-  }
-
-  if(kakaoLocation?.lat && kakaoLocation?.lng){
-    const area = kakaoLocation.nearestAreaGroup || "화성시";
-    const nearestDistrict = kakaoLocation.nearestDistrict || null;
-    return {
       userContext:{
         ...userContext,
-        mode:"reference",
+        mode:"district",
         selectedAreaGroup:area,
-        basisDistrict:nearestDistrict,
-        basisPlaceName:kakaoLocation.name || kakaoLocation.originalText || "입력 위치",
-        basisAddress:kakaoLocation.address || "",
-        referenceLat:kakaoLocation.lat,
-        referenceLng:kakaoLocation.lng,
+        basisDistrict:directDistrict,
+        referenceLat:ref?.lat,
+        referenceLng:ref?.lng,
         lat:undefined,
         lng:undefined
       },
       gpsStatus:gps,
-      usedBasis:"reference_location",
+      usedBasis:"mentioned_district",
       needsAreaClarification:false,
       areaGroup:area,
-      basisDistrict:nearestDistrict,
-      referenceLocation:kakaoLocation,
-      note:"사용자가 말한 주소/장소를 카카오 Local API로 좌표 검색해 기준 위치로 사용"
+      basisDistrict:directDistrict,
+      note:gps.hasGps ? "GPS보다 사용자가 현재 질문에서 직접 말한 읍면동을 우선" : "사용자가 현재 질문에서 직접 말한 읍면동 기준 추천"
     };
   }
 
   if(directArea){
     return {
-      userContext:{...userContext, mode:"district", selectedAreaGroup:directArea, basisDistrict:null, basisPlaceName:null, lat:undefined, lng:undefined},
-      gpsStatus:gps, usedBasis:"mentioned_area", needsAreaClarification:false, areaGroup:directArea, basisDistrict:null, referenceLocation:null,
+      userContext:{...userContext, mode:"district", selectedAreaGroup:directArea, basisDistrict:null, lat:undefined, lng:undefined},
+      gpsStatus:gps,
+      usedBasis:"mentioned_area",
+      needsAreaClarification:false,
+      areaGroup:directArea,
+      basisDistrict:null,
       note:gps.hasGps ? "GPS보다 사용자가 현재 질문에서 직접 말한 지역을 우선" : "사용자가 현재 질문에서 직접 말한 지역 기준 추천"
     };
   }
@@ -487,40 +313,69 @@ function resolveRecommendationContext(userContext={}, analysis={}, localHints={}
     const ref = getReferenceCoordFromDistrict(aiDistrict);
     const area = getAreaGroup(aiDistrict);
     return {
-      userContext:{...userContext, mode:"district", selectedAreaGroup:area, basisDistrict:aiDistrict, basisPlaceName:null, referenceLat:ref?.lat, referenceLng:ref?.lng, lat:undefined, lng:undefined},
-      gpsStatus:gps, usedBasis:aiBasis === "purpose_only" ? "mentioned_district" : aiBasis, needsAreaClarification:false, areaGroup:area, basisDistrict:aiDistrict, referenceLocation:null,
+      userContext:{
+        ...userContext,
+        mode:"district",
+        selectedAreaGroup:area,
+        basisDistrict:aiDistrict,
+        referenceLat:ref?.lat,
+        referenceLng:ref?.lng,
+        lat:undefined,
+        lng:undefined
+      },
+      gpsStatus:gps,
+      usedBasis:aiBasis === "purpose_only" ? "mentioned_district" : aiBasis,
+      needsAreaClarification:false,
+      areaGroup:area,
+      basisDistrict:aiDistrict,
       note:"대화 맥락에서 나온 정확한 읍면동 기준 추천"
     };
   }
 
   if(aiArea && aiAreaIsContextual){
     return {
-      userContext:{...userContext, mode:"district", selectedAreaGroup:aiArea, basisDistrict:null, basisPlaceName:null, lat:undefined, lng:undefined},
-      gpsStatus:gps, usedBasis:aiBasis, needsAreaClarification:false, areaGroup:aiArea, basisDistrict:null, referenceLocation:null,
+      userContext:{...userContext, mode:"district", selectedAreaGroup:aiArea, basisDistrict:null, lat:undefined, lng:undefined},
+      gpsStatus:gps,
+      usedBasis:aiBasis,
+      needsAreaClarification:false,
+      areaGroup:aiArea,
+      basisDistrict:null,
       note:"대화 맥락에서 나온 집·목적지·가려는 지역 기준 추천"
     };
   }
 
   if(selectedArea){
     return {
-      userContext:{...userContext, mode:"district", selectedAreaGroup:selectedArea, basisDistrict:null, basisPlaceName:null, lat:undefined, lng:undefined},
-      gpsStatus:gps, usedBasis:"selected_area", needsAreaClarification:false, areaGroup:selectedArea, basisDistrict:null, referenceLocation:null,
+      userContext:{...userContext, mode:"district", selectedAreaGroup:selectedArea, basisDistrict:null, lat:undefined, lng:undefined},
+      gpsStatus:gps,
+      usedBasis:"selected_area",
+      needsAreaClarification:false,
+      areaGroup:selectedArea,
+      basisDistrict:null,
       note:gps.outsideHwaseong ? "GPS는 화성 밖이라 선택 권역을 기준으로 추천" : "사용자가 선택한 화성 권역 기준 추천"
     };
   }
 
   if(gps.hasGps && gps.outsideHwaseong){
     return {
-      userContext:{...userContext, mode:"none", basisDistrict:null, basisPlaceName:null, lat:undefined, lng:undefined},
-      gpsStatus:gps, usedBasis:"outside_gps_no_area", needsAreaClarification:true, areaGroup:null, basisDistrict:null, referenceLocation:null,
+      userContext:{...userContext, mode:"none", basisDistrict:null, lat:undefined, lng:undefined},
+      gpsStatus:gps,
+      usedBasis:"outside_gps_no_area",
+      needsAreaClarification:true,
+      areaGroup:null,
+      basisDistrict:null,
       note:"현재 위치가 화성시 밖이고 화성 내 기준 지역이 없음"
     };
   }
 
   if(gps.hasGps && gps.inHwaseong){
     return {
-      userContext:{...userContext, mode:"gps", basisDistrict:null, basisPlaceName:null},
-      gpsStatus:gps, usedBasis:"gps", needsAreaClarification:false, areaGroup:gps.nearestAreaGroup, basisDistrict:null, referenceLocation:null,
+      userContext:{...userContext, mode:"gps", basisDistrict:null},
+      gpsStatus:gps,
+      usedBasis:"gps",
+      needsAreaClarification:false,
+      areaGroup:gps.nearestAreaGroup,
+      basisDistrict:null,
       note:"현재 위치 기준 추천 가능"
     };
   }
@@ -529,23 +384,35 @@ function resolveRecommendationContext(userContext={}, analysis={}, localHints={}
     const ref = getReferenceCoordFromDistrict(aiDistrict);
     const area = getAreaGroup(aiDistrict);
     return {
-      userContext:{...userContext, mode:"district", selectedAreaGroup:area, basisDistrict:aiDistrict, basisPlaceName:null, referenceLat:ref?.lat, referenceLng:ref?.lng},
-      gpsStatus:gps, usedBasis:"mentioned_district", needsAreaClarification:false, areaGroup:area, basisDistrict:aiDistrict, referenceLocation:null,
+      userContext:{...userContext, mode:"district", selectedAreaGroup:area, basisDistrict:aiDistrict, referenceLat:ref?.lat, referenceLng:ref?.lng},
+      gpsStatus:gps,
+      usedBasis:"mentioned_district",
+      needsAreaClarification:false,
+      areaGroup:area,
+      basisDistrict:aiDistrict,
       note:"AI가 해석한 정확한 읍면동 기준 추천"
     };
   }
 
   if(aiArea){
     return {
-      userContext:{...userContext, mode:"district", selectedAreaGroup:aiArea, basisDistrict:null, basisPlaceName:null},
-      gpsStatus:gps, usedBasis:"mentioned_area", needsAreaClarification:false, areaGroup:aiArea, basisDistrict:null, referenceLocation:null,
+      userContext:{...userContext, mode:"district", selectedAreaGroup:aiArea, basisDistrict:null},
+      gpsStatus:gps,
+      usedBasis:"mentioned_area",
+      needsAreaClarification:false,
+      areaGroup:aiArea,
+      basisDistrict:null,
       note:"AI가 해석한 화성 내 지역 기준 추천"
     };
   }
 
   return {
-    userContext:{...userContext, mode:userContext.mode || "none", basisDistrict:null, basisPlaceName:null},
-    gpsStatus:gps, usedBasis:"purpose_only", needsAreaClarification:false, areaGroup:null, basisDistrict:null, referenceLocation:null,
+    userContext:{...userContext, mode:userContext.mode || "none", basisDistrict:null},
+    gpsStatus:gps,
+    usedBasis:"purpose_only",
+    needsAreaClarification:false,
+    areaGroup:null,
+    basisDistrict:null,
     note:"위치 기준 없이 목적과 조건을 기준으로 추천"
   };
 }
@@ -560,24 +427,7 @@ function outsideGpsClarifyAnswer(message, analysis, gpsStatus){
 function getLocationMeta(f, userContext={}){
   const area = getAreaGroup(f.district);
 
-  if(userContext.mode === "reference" && Number.isFinite(Number(userContext.referenceLat)) && Number.isFinite(Number(userContext.referenceLng))){
-    const basis = userContext.basisPlaceName || userContext.basisAddress || "입력 위치";
-    const fc = getFacilityCoord(f);
-    if(fc){
-      const km = calcDistanceKm(Number(userContext.referenceLat), Number(userContext.referenceLng), fc.lat, fc.lng);
-      if(km <= 1.5) return { type:"referenceVeryNear", label:`${basis} 기준 약 ${km.toFixed(1)}km`, detail:`${basis} 주변에서 매우 가까운 시설`, distanceKm:Number(km.toFixed(1)), distanceSource:fc.source };
-      if(km <= 4) return { type:"referenceNear", label:`${basis} 기준 약 ${km.toFixed(1)}km`, detail:`${basis} 주변에서 가까운 시설`, distanceKm:Number(km.toFixed(1)), distanceSource:fc.source };
-      if(km <= 8) return { type:"referenceMid", label:`${basis} 기준 약 ${km.toFixed(1)}km`, detail:`${basis} 기준 접근 가능한 시설`, distanceKm:Number(km.toFixed(1)), distanceSource:fc.source };
-      if(area === userContext.selectedAreaGroup) return { type:"sameArea", label:`${basis} 기준 약 ${km.toFixed(1)}km`, detail:`${basis}이 포함된 권역의 시설`, distanceKm:Number(km.toFixed(1)), distanceSource:fc.source };
-      return { type:"none", label:`${basis} 기준 약 ${km.toFixed(1)}km`, detail:"입력 위치와 거리가 있는 화성시 시설", distanceKm:Number(km.toFixed(1)), distanceSource:fc.source };
-    }
-    if(userContext.basisDistrict && f.district === userContext.basisDistrict){
-      return { type:"sameDistrict", label:`${basis} 주변`, detail:`${basis}이 속한 ${userContext.basisDistrict} 내 시설` };
-    }
-    return { type:"none", label:`${basis} 기준`, detail:"입력 위치 기준 추천" };
-  }
-
-  // 사용자가 정확한 읍면동을 말한 경우
+  // 사용자가 정확한 읍면동을 말한 경우: 그 읍면동을 최우선 기준으로 보여준다.
   if(userContext.mode === "district" && userContext.basisDistrict){
     if(f.district === userContext.basisDistrict){
       return { type:"sameDistrict", label:`${userContext.basisDistrict} 내 시설`, detail:`${userContext.basisDistrict} 기준으로 가장 직접적인 시설` };
@@ -587,7 +437,7 @@ function getLocationMeta(f, userContext={}){
       const km = calcDistanceKm(Number(userContext.referenceLat), Number(userContext.referenceLng), Number(c.lat), Number(c.lng));
       if(km <= 3) return { type:"districtVeryNear", label:`${userContext.basisDistrict} 기준 약 ${km.toFixed(1)}km`, detail:`${userContext.basisDistrict}과 매우 가까운 시설`, distanceKm:Number(km.toFixed(1)) };
       if(km <= 7) return { type:"districtNear", label:`${userContext.basisDistrict} 기준 약 ${km.toFixed(1)}km`, detail:`${userContext.basisDistrict} 기준 가까운 시설`, distanceKm:Number(km.toFixed(1)) };
-      if(area === userContext.selectedAreaGroup) return { type:"sameArea", label:`${userContext.selectedAreaGroup} 내 시설`, detail:`${userContext.basisDistrict} 인근 권역 시설`, distanceKm:Number(km.toFixed(1)) };
+      if(area === userContext.selectedAreaGroup) return { type:"sameArea", label:`${userContext.selectedAreaGroup} 내 시설`, detail:`${userContext.basisDistrict} 인근 동탄권 시설`, distanceKm:Number(km.toFixed(1)) };
       return { type:"none", label:`${userContext.basisDistrict} 기준 약 ${km.toFixed(1)}km`, detail:"입력한 지역과 거리가 있는 화성시 시설", distanceKm:Number(km.toFixed(1)) };
     }
     if(area === userContext.selectedAreaGroup) return { type:"sameArea", label:`${userContext.selectedAreaGroup} 내 시설`, detail:`${userContext.basisDistrict}이 포함된 권역 시설` };
@@ -599,24 +449,19 @@ function getLocationMeta(f, userContext={}){
     if(adjacentGroups[userContext.selectedAreaGroup]?.includes(area)) return { type:"nearArea", label:"인접 권역", detail:`${userContext.selectedAreaGroup} 인근 ${area}` };
     return { type:"none", label:"화성시 시설", detail:"선택 권역 외 시설" };
   }
-  if(userContext.mode === "gps" && userContext.lat && userContext.lng){
-    const fc = getFacilityCoord(f);
-    if(fc){
-      const km = calcDistanceKm(userContext.lat, userContext.lng, fc.lat, fc.lng);
-      if(km <= 3) return { type:"gpsVeryNear", label:`약 ${km.toFixed(1)}km`, detail:"현재 위치와 매우 가까운 시설", distanceKm: Number(km.toFixed(1)), distanceSource:fc.source };
-      if(km <= 7) return { type:"gpsNear", label:`약 ${km.toFixed(1)}km`, detail:"현재 위치 기준 가까운 시설", distanceKm: Number(km.toFixed(1)), distanceSource:fc.source };
-      if(km <= 13) return { type:"gpsMid", label:`약 ${km.toFixed(1)}km`, detail:"현재 위치 기준 접근 가능", distanceKm: Number(km.toFixed(1)), distanceSource:fc.source };
-      if(km <= 24) return { type:"gpsFar", label:`약 ${km.toFixed(1)}km`, detail:"화성시 내 이동권 시설", distanceKm: Number(km.toFixed(1)), distanceSource:fc.source };
-      return { type:"none", label:`약 ${km.toFixed(1)}km`, detail:"현재 위치와 거리가 있는 시설", distanceKm: Number(km.toFixed(1)), distanceSource:fc.source };
-    }
+  if(userContext.mode === "gps" && userContext.lat && userContext.lng && districtCoords[f.district]){
+    const c = districtCoords[f.district];
+    const km = calcDistanceKm(userContext.lat, userContext.lng, c.lat, c.lng);
+    if(km <= 3) return { type:"gpsVeryNear", label:`약 ${km.toFixed(1)}km`, detail:"현재 위치와 매우 가까운 권역", distanceKm: Number(km.toFixed(1)) };
+    if(km <= 7) return { type:"gpsNear", label:`약 ${km.toFixed(1)}km`, detail:"현재 위치 기준 가까운 시설", distanceKm: Number(km.toFixed(1)) };
+    if(km <= 13) return { type:"gpsMid", label:`약 ${km.toFixed(1)}km`, detail:"현재 위치 기준 접근 가능", distanceKm: Number(km.toFixed(1)) };
+    if(km <= 24) return { type:"gpsFar", label:`약 ${km.toFixed(1)}km`, detail:"화성시 내 이동권 시설", distanceKm: Number(km.toFixed(1)) };
+    return { type:"none", label:`약 ${km.toFixed(1)}km`, detail:"현재 위치와 거리가 있는 시설", distanceKm: Number(km.toFixed(1)) };
   }
   return { type:"none", label:"조건 기준", detail:"입력한 목적과 조건을 기준으로 추천" };
 }
 function locationScore(f,userContext){
   const meta = getLocationMeta(f,userContext);
-  if(meta.type === "referenceVeryNear") return 70;
-  if(meta.type === "referenceNear") return 54;
-  if(meta.type === "referenceMid") return 34;
   if(meta.type === "sameDistrict") return 72;
   if(meta.type === "districtVeryNear") return 58;
   if(meta.type === "districtNear") return 42;
@@ -694,16 +539,10 @@ function scoreFacility(f,intent,userContext){
   score += locationScore(f,userContext);
   return score;
 }
-function buildReasons(f,intent,effectiveUserContext={}){
+function buildReasons(f,intent,effectiveUserContext){
   const reasons=[];
-  const meta = getLocationMeta(f,effectiveUserContext);
-  if(effectiveUserContext.mode === "reference" && meta.type !== "none"){
-    reasons.push(meta.detail);
-  }else if(effectiveUserContext.basisDistrict && f.district === effectiveUserContext.basisDistrict){
-    reasons.push(`${effectiveUserContext.basisDistrict} 안에 있는 시설이라 입력한 지역과 가장 직접적으로 맞아요.`);
-  }else if(meta.type !== "none"){
-    reasons.push(meta.detail);
-  }
+  const meta = getLocationMeta(f,userContext);
+  if(meta.type !== "none") reasons.push(meta.detail);
   if((intent.districts || []).includes(f.district) || (intent.districts || []).includes(getAreaGroup(f.district))) reasons.push("입력한 지역 기준과 맞는 시설입니다.");
   if((intent.categories || []).includes(f.category)) reasons.push(`${f.category} 목적과 잘 맞습니다.`);
   if(intent.lowCrowd && f.crowd==="여유") reasons.push("혼잡도가 낮은 시설입니다.");
@@ -711,17 +550,16 @@ function buildReasons(f,intent,effectiveUserContext={}){
   if(f.reservable) reasons.push("예약 가능 여부를 확인해볼 수 있습니다.");
   if(f.fee && String(f.fee).includes("무료")) reasons.push("무료 또는 저비용으로 이용할 수 있습니다.");
   if(!reasons.length) reasons.push("입력한 목적과 시설 정보가 연결됩니다.");
-  return unique(reasons).slice(0,4);
+  return reasons.slice(0,4);
 }
-function enrich(f,effectiveUserContext={},reasons=[]){
+function enrich(f,effectiveUserContext,reasons=[]){
   return {
     ...f,
     areaGroup: getAreaGroup(f.district),
-    locationMeta: getLocationMeta(f,effectiveUserContext),
-    recommendationReasons: reasons.length ? reasons : buildReasons(f, localQueryHints(""), effectiveUserContext)
+    locationMeta: getLocationMeta(f,userContext),
+    recommendationReasons: reasons.length ? reasons : buildReasons(f, localQueryHints(""), userContext)
   };
 }
-
 function searchFacilities(message, analysis, userContext){
   const local = localQueryHints(message);
   const categories = unique([...(analysis.targetCategories || []), ...local.categories]);
@@ -734,13 +572,6 @@ function searchFacilities(message, analysis, userContext){
     categories,
     tokens,
     districts,
-    explicitDistrictMentions: local.explicitDistrictMentions || [],
-    referenceLocation: userContext.mode === "reference" ? {
-      name:userContext.basisPlaceName || null,
-      address:userContext.basisAddress || null,
-      lat:userContext.referenceLat || null,
-      lng:userContext.referenceLng || null
-    } : null,
     avoidCategories: analysis.avoidCategories || [],
     lowCrowd: Boolean(constraints.lowCrowd || local.lowCrowd),
     indoor: Boolean(constraints.indoor || local.indoor),
@@ -871,78 +702,6 @@ function makeNaturalAnswer(message, analysis, recs, userContext){
 
   return polishAnswer(`${safeLead}<br>${basisText} ${area} 안에서 이용하기 좋은 시설을 우선 골라봤어요. 가장 먼저 볼 만한 곳은 <b>${first.name}</b>입니다.`);
 }
-
-function buildLocalOnlyAnalysis(message){
-  const local = localQueryHints(message);
-  const addr = extractAddressCandidate(message);
-  const place = extractPlaceCandidate(message);
-  const targetLocationText = addr || place || "none";
-  const targetLocationType = addr ? "address" : (place ? "place" : "none");
-  return {
-    requestType:"recommend",
-    canRecommend:true,
-    mainIntent: local.tokens?.length ? local.tokens.join(", ") : "공공시설 추천",
-    contextSummary:"사용자 문장과 현재 위치 정보를 기준으로 시설을 찾습니다.",
-    recommendationBasis: "purpose_only",
-    targetCategories:local.categories,
-    avoidCategories:[],
-    targetDistricts:local.districts,
-    targetLocationText,
-    targetLocationType,
-    keywords:local.tokens,
-    missingData:[],
-    constraints:{
-      near:local.near,
-      indoor:local.indoor,
-      lowCrowd:local.lowCrowd,
-      reservable:local.reservable,
-      freePreferred:local.freePreferred
-    },
-    answerLead:"말씀하신 조건을 기준으로 화성시 시설 DB에서 찾아봤어요.",
-    followUpSuggestions:["거리 보기","운영시간","예약 여부"]
-  };
-}
-async function smartFallback(message,userContext={}, reason="fallback"){
-  const local = localQueryHints(message);
-  const analysis = buildLocalOnlyAnalysis(message);
-  const kakaoLocation = await resolveKakaoLocation(message, analysis, local);
-  const resolved = resolveRecommendationContext(userContext, analysis, local, kakaoLocation);
-  const effectiveUserContext = resolved.userContext;
-  analysis.recommendationBasis = resolved.usedBasis === "outside_gps_no_area" ? analysis.recommendationBasis : resolved.usedBasis;
-
-  const {intent,candidates} = searchFacilities(message,analysis,effectiveUserContext);
-  const recs = candidates.slice(0,3).map(f=>enrich(f,effectiveUserContext,buildReasons(f,intent,effectiveUserContext)));
-  const related = buildRelated(recs,intent,effectiveUserContext);
-
-  if(!recs.length){
-    return {
-      mode:"system_fallback",
-      responseType:"db_gap",
-      answer:"현재 H-MATE 시설 DB만으로는 바로 추천하기 어려운 요청이에요. 공원, 도서관, 체육시설, 문화시설처럼 등록된 공공시설 범위 안에서 다시 물어보시면 더 정확히 안내드릴게요.",
-      summary:"현재 DB에서 직접 추천 가능한 시설이 없습니다.",
-      intent,
-      selectedFacility:null,
-      recommendations:[],
-      related:[],
-      suggestions:["도서관 추천","공원 추천","체육시설 추천"],
-      analysis:{...analysis, locationResolution:resolved, referenceLocation:kakaoLocation || null, fallbackReason:reason}
-    };
-  }
-
-  return {
-    mode:"system_fallback",
-    responseType:"recommend",
-    answer:polishAnswer(makeNaturalAnswer(message,analysis,recs,effectiveUserContext)),
-    summary:"화성시 시설 DB를 기준으로 목적과 지역을 반영해 추천했습니다.",
-    intent,
-    selectedFacility:null,
-    recommendations:recs,
-    related,
-    suggestions:["거리 보기","운영시간","예약 여부"],
-    analysis:{...analysis, locationResolution:resolved, referenceLocation:kakaoLocation || null, fallbackReason:reason}
-  };
-}
-
 function fallback(message,userContext){
   const local = localQueryHints(message);
   const fakeAnalysis = {
@@ -990,72 +749,6 @@ function fallback(message,userContext){
   };
 }
 
-
-function normalizeAnalysisShape(input={}, message=""){
-  const local = localQueryHints(message);
-  const addr = extractAddressCandidate(message);
-  const place = extractPlaceCandidate(message);
-  const localLocation = addr || place || "none";
-
-  const allowedRequestTypes = ["recommend","compare","answer_selected","clarify","db_gap","out_of_scope"];
-  const allowedBasis = ["gps","selected_area","home_area","work_area","destination_area","mentioned_area","mentioned_district","reference_location","purpose_only"];
-  const allowedLocationType = ["none","address","place","district","area","gps_context"];
-
-  const safe = {
-    requestType: allowedRequestTypes.includes(input.requestType) ? input.requestType : "recommend",
-    canRecommend: typeof input.canRecommend === "boolean" ? input.canRecommend : true,
-    mainIntent: String(input.mainIntent || local.tokens?.join(", ") || "공공시설 추천"),
-    contextSummary: String(input.contextSummary || "사용자 문장과 위치 기준을 바탕으로 시설을 찾습니다."),
-    recommendationBasis: allowedBasis.includes(input.recommendationBasis) ? input.recommendationBasis : (localLocation !== "none" ? "reference_location" : "purpose_only"),
-    targetCategories: Array.isArray(input.targetCategories) ? input.targetCategories.slice(0,6) : local.categories,
-    avoidCategories: Array.isArray(input.avoidCategories) ? input.avoidCategories.slice(0,6) : [],
-    targetDistricts: Array.isArray(input.targetDistricts) ? input.targetDistricts.slice(0,6) : local.districts,
-    targetLocationText: typeof input.targetLocationText === "string" && input.targetLocationText.trim() ? input.targetLocationText.trim() : localLocation,
-    targetLocationType: allowedLocationType.includes(input.targetLocationType) ? input.targetLocationType : (addr ? "address" : (place ? "place" : "none")),
-    keywords: Array.isArray(input.keywords) ? input.keywords.slice(0,10) : local.tokens,
-    missingData: Array.isArray(input.missingData) ? input.missingData.slice(0,6) : [],
-    constraints: {
-      near: Boolean(input.constraints?.near ?? local.near),
-      indoor: Boolean(input.constraints?.indoor ?? local.indoor),
-      lowCrowd: Boolean(input.constraints?.lowCrowd ?? local.lowCrowd),
-      reservable: Boolean(input.constraints?.reservable ?? local.reservable),
-      freePreferred: Boolean(input.constraints?.freePreferred ?? local.freePreferred)
-    },
-    answerLead: String(input.answerLead || "말씀하신 조건을 기준으로 화성시 시설 DB에서 찾아봤어요."),
-    followUpSuggestions: Array.isArray(input.followUpSuggestions) && input.followUpSuggestions.length
-      ? input.followUpSuggestions.slice(0,3)
-      : ["거리 보기","운영시간","예약 여부"]
-  };
-
-  if((!safe.targetLocationText || safe.targetLocationText === "none") && localLocation !== "none"){
-    safe.targetLocationText = localLocation;
-    safe.targetLocationType = addr ? "address" : "place";
-    safe.recommendationBasis = "purpose_only";
-  }
-  return safe;
-}
-function parseAnalysisOrLocal(raw, message){
-  const text = String(raw || "").trim();
-  if(!text){
-    return {
-      analysis: normalizeAnalysisShape(buildLocalOnlyAnalysis(message), message),
-      parseError: "empty_output"
-    };
-  }
-  try{
-    return {
-      analysis: normalizeAnalysisShape(JSON.parse(text), message),
-      parseError: null
-    };
-  }catch(err){
-    // 모델 JSON이 잘리거나 깨져도 서비스는 멈추지 않고 로컬/카카오 위치검색 추천으로 이어간다.
-    return {
-      analysis: normalizeAnalysisShape(buildLocalOnlyAnalysis(message), message),
-      parseError: String(err?.message || err)
-    };
-  }
-}
-
 async function analyzeContextWithAI(client, {message, userContext, selected, history}){
   const response = await client.responses.create({
     model: process.env.OPENAI_MODEL || "gpt-5-mini",
@@ -1068,15 +761,13 @@ async function analyzeContextWithAI(client, {message, userContext, selected, his
           "사용자의 현재 문장뿐 아니라 최근 대화 맥락을 함께 읽고 진짜 의도와 추천 기준을 판단한다.",
           "추천 기준 우선순위는 현재 문장에서 직접 말한 정확한 읍면동 > 현재 문장에서 직접 말한 권역/생활지명 > 대화 맥락의 집/목적지/가려는 곳 > 선택 권역 > GPS 현재 위치 > 목적 중심이다.",
           "동탄6동, 동탄 6동, 향남읍, 봉담읍처럼 정확한 읍면동이 나오면 넓은 권역으로 뭉개지 말고 그 읍면동 기준으로 판단한다.",
-          "주소나 장소명은 참고만 하고, 지도 API 좌표 검색 없이 현재 시설 DB·읍면동·권역 기준으로 추천한다.",
-          "targetLocationText가 없으면 문자열 none을 넣고, targetLocationType은 none으로 둔다.",
           "사용자가 사는 곳, 일하는 곳, 퇴근길, 집 근처, 목적지, 현재 위치 허용 여부 같은 생활 맥락을 해석한다.",
           "H-MATE는 화성시 공공시설 DB 안에서만 추천한다. DB 밖 시설명, 주소, 전화, 운영시간은 지어내지 않는다.",
           "민간 식당/카페/맛집은 현재 DB 범위 밖이다. 다만 식사 후 운동/독서처럼 공공시설 추천과 연결되는 목적은 추천 가능하다.",
           "공공화장실처럼 별도 DB가 없는 생활서비스는 db_gap으로 판단한다.",
           "오늘/이번 주말처럼 실시간 일정이 필요한 행사 질문은 실제 일정을 아는 척하지 말고, 실시간 일정은 없지만 관련 문화시설/프로그램 확인 방향으로 안내한다.",
           "딱딱한 표현을 피하고, answerLead에는 사용자의 상황을 자연스럽게 받아주는 한두 문장을 쓴다.",
-          "금지 표현: 추천 기준 미설정, 위치 기준 없음, 후보, DB 후보, 위도, 경도. 좌표값을 답변에 직접 말하지 않는다. 현재 위치가 화성시 밖이면 GPS 기준 추천을 고집하지 말고, 사용자가 말한 화성 내 지역이나 선택 권역을 기준으로 삼는다. 화성 내 지역이 없으면 추천보다 지역 확인 질문을 우선한다.",
+          "금지 표현: 추천 기준 미설정, 위치 기준 없음, 후보, DB 후보, 위도, 경도. 현재 위치가 화성시 밖이면 GPS 기준 추천을 고집하지 말고, 사용자가 말한 화성 내 지역이나 선택 권역을 기준으로 삼는다. 화성 내 지역이 없으면 추천보다 지역 확인 질문을 우선한다.",
           "followUpSuggestions는 버튼에 들어갈 짧은 문구만 쓴다. 예: 거리 보기, 운영시간, 예약 여부, 한산한 곳, 다른 시설."
         ].join("\\n")
       },
@@ -1113,12 +804,10 @@ async function analyzeContextWithAI(client, {message, userContext, selected, his
             canRecommend:{type:"boolean"},
             mainIntent:{type:"string"},
             contextSummary:{type:"string"},
-            recommendationBasis:{type:"string", enum:["gps","selected_area","home_area","work_area","destination_area","mentioned_area","mentioned_district","reference_location","purpose_only"]},
+            recommendationBasis:{type:"string", enum:["gps","selected_area","home_area","work_area","destination_area","mentioned_area","purpose_only"]},
             targetCategories:{type:"array", maxItems:6, items:{type:"string"}},
             avoidCategories:{type:"array", maxItems:6, items:{type:"string"}},
             targetDistricts:{type:"array", maxItems:6, items:{type:"string"}},
-            targetLocationText:{type:"string"},
-            targetLocationType:{type:"string", enum:["none","address","place","district","area","gps_context"]},
             keywords:{type:"array", maxItems:10, items:{type:"string"}},
             missingData:{type:"array", maxItems:6, items:{type:"string"}},
             constraints:{
@@ -1136,18 +825,13 @@ async function analyzeContextWithAI(client, {message, userContext, selected, his
             answerLead:{type:"string"},
             followUpSuggestions:{type:"array", maxItems:3, items:{type:"string"}}
           },
-          required:["requestType","canRecommend","mainIntent","contextSummary","recommendationBasis","targetCategories","avoidCategories","targetDistricts","targetLocationText","targetLocationType","keywords","missingData","constraints","answerLead","followUpSuggestions"]
+          required:["requestType","canRecommend","mainIntent","contextSummary","recommendationBasis","targetCategories","avoidCategories","targetDistricts","keywords","missingData","constraints","answerLead","followUpSuggestions"]
         }
       }
     }
   });
 
-  const parsed = parseAnalysisOrLocal(response.output_text, message);
-  return {
-    analysis: parsed.analysis,
-    usage: response.usage || null,
-    aiParseError: parsed.parseError
-  };
+  return {analysis: JSON.parse(response.output_text), usage: response.usage || null};
 }
 
 export default async function handler(req,res){
@@ -1163,7 +847,7 @@ export default async function handler(req,res){
   }
 
   if(!process.env.OPENAI_API_KEY){
-    res.status(200).json(await smartFallback(message,userContext,"no_openai_key"));
+    res.status(200).json(fallback(message,userContext));
     return;
   }
 
@@ -1172,16 +856,8 @@ export default async function handler(req,res){
 
   try{
     const client = new OpenAI({apiKey: process.env.OPENAI_API_KEY});
-    const {analysis, usage, aiParseError} = await analyzeContextWithAI(client, {message, userContext, selected, history});
+    const {analysis, usage} = await analyzeContextWithAI(client, {message, userContext, selected, history});
     const localHints = localQueryHints(message);
-    const localAddr = extractAddressCandidate(message);
-    const localPlace = extractPlaceCandidate(message);
-    if((!analysis.targetLocationText || analysis.targetLocationText === "none") && (localAddr || localPlace)){
-      analysis.targetLocationText = localAddr || localPlace;
-      analysis.targetLocationType = localAddr ? "address" : "place";
-      analysis.recommendationBasis = "purpose_only";
-    }
-    const kakaoLocation = await resolveKakaoLocation(message, analysis, localHints);
 
     if(localHints.dbLimit?.toilet){
       res.status(200).json({
@@ -1194,7 +870,7 @@ export default async function handler(req,res){
         recommendations:[],
         related:[],
         suggestions:["근처 공원","도서관 추천","체육시설 추천"],
-        analysis:{...analysis, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
+        analysis,
         usage:{decision:usage}
       });
       return;
@@ -1211,7 +887,7 @@ export default async function handler(req,res){
         recommendations:[],
         related:[],
         suggestions:["산책할 곳","운동할 곳","도서관 추천"],
-        analysis:{...analysis, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
+        analysis,
         usage:{decision:usage}
       });
       return;
@@ -1225,7 +901,7 @@ export default async function handler(req,res){
       analysis.answerLead = "실시간 행사 일정까지는 현재 DB에서 바로 확인하기 어렵지만, 말씀하신 지역을 기준으로 행사나 프로그램을 확인해볼 만한 공공·문화시설을 찾아볼게요.";
     }
 
-    const resolved = resolveRecommendationContext(userContext, analysis, localHints, kakaoLocation);
+    const resolved = resolveRecommendationContext(userContext, analysis, localHints);
     const effectiveUserContext = resolved.userContext;
 
     if(
@@ -1254,7 +930,7 @@ export default async function handler(req,res){
         recommendations:[],
         related:[],
         suggestions:["동탄 기준","병점 기준","봉담 기준"],
-        analysis:{...analysis, recommendationBasis:"outside_gps_no_area", locationResolution:resolved, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
+        analysis:{...analysis, recommendationBasis:"outside_gps_no_area", locationResolution:resolved},
         usage:{decision:usage}
       });
       return;
@@ -1264,7 +940,7 @@ export default async function handler(req,res){
 
     if(analysis.requestType === "answer_selected" && selected){
       const answer = selectedFactAnswer(message, selected, effectiveUserContext, analysis);
-      const selectedEnriched = enrich(selected,effectiveUserContext,buildReasons(selected,localQueryHints(message),effectiveUserContext));
+      const selectedEnriched = enrich(selected,effectiveUserContext,buildReasons(selected,localQueryHints(message),userContext));
       const lastRecs = unique(lastRecommendationIds.map(Number))
         .map(findFacilityById)
         .filter(Boolean)
@@ -1280,7 +956,7 @@ export default async function handler(req,res){
         recommendations:lastRecs.length ? lastRecs : [selectedEnriched],
         related:buildRelated(lastRecs.length ? lastRecs : [selectedEnriched], localQueryHints(message), effectiveUserContext),
         suggestions:analysis.followUpSuggestions?.length ? analysis.followUpSuggestions : ["거리 보기","운영시간","예약 여부"],
-        analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
+        analysis,
         usage:{decision:usage}
       });
       return;
@@ -1308,7 +984,7 @@ export default async function handler(req,res){
         recommendations:[],
         related:[],
         suggestions:analysis.followUpSuggestions?.length ? analysis.followUpSuggestions : ["도서관 추천","공원 추천","체육시설 추천"],
-        analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
+        analysis,
         usage:{decision:usage}
       });
       return;
@@ -1320,30 +996,17 @@ export default async function handler(req,res){
     const responseType = analysis.requestType === "compare" ? "compare" : "recommend";
 
     if(!recs.length){
-      const backup = await smartFallback(message, effectiveUserContext, "no_candidates_after_ai");
-      if(Array.isArray(backup.recommendations) && backup.recommendations.length){
-        res.status(200).json({
-          ...backup,
-          mode:"ai",
-          responseType:"recommend",
-          usage:{decision:usage},
-          analysis:{...(backup.analysis || {}), originalAnalysis:analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || backup.analysis?.referenceLocation || null, aiParseError:aiParseError || null}
-        });
-        return;
-      }
-
-      const basisName = effectiveUserContext.basisPlaceName || effectiveUserContext.basisDistrict || effectiveUserContext.selectedAreaGroup || "입력한 조건";
       res.status(200).json({
         mode:"ai",
         responseType:"db_gap",
-        answer:polishAnswer(`${basisName} 기준으로 찾는 상황은 이해했지만, 현재 H-MATE 시설 DB에서 바로 추천할 수 있는 시설을 찾지 못했어요. 도서관, 공원, 체육시설처럼 등록된 공공시설 범위로 다시 물어보시면 더 정확히 찾아볼게요.`),
-        summary:"현재 DB에서 직접 추천 가능한 시설이 없습니다.",
+        answer:polishAnswer(analysis.answerLead || "말씀하신 상황은 이해했지만, 현재 H-MATE 시설 DB에서 바로 추천할 수 있는 시설을 찾지 못했어요."),
+        summary:analysis.contextSummary,
         intent,
         selectedFacility:null,
         recommendations:[],
         related:[],
         suggestions:analysis.followUpSuggestions?.length ? analysis.followUpSuggestions : ["도서관 추천","공원 추천","체육시설 추천"],
-        analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
+        analysis,
         usage:{decision:usage}
       });
       return;
@@ -1359,11 +1022,11 @@ export default async function handler(req,res){
       recommendations:recs,
       related,
       suggestions:analysis.followUpSuggestions?.length ? analysis.followUpSuggestions : ["거리 보기","운영시간","예약 여부"],
-      analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
+      analysis,
       usage:{decision:usage}
     });
   }catch(err){
     console.error(err);
-    res.status(200).json(await smartFallback(message,userContext,"api_error"));
+    res.status(200).json(fallback(message,userContext));
   }
 }
