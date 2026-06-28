@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>H-MATE | 카카오 위치검색 v29-3</title>
+<title>H-MATE | 미리보기 복사 UX v29-3.2</title>
 <style>
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css");
 :root {
@@ -882,6 +882,24 @@ button{cursor:pointer}
   word-break:keep-all;
   overflow-wrap:anywhere;
 }
+.drawerCopyBtn{
+  position:static;
+  height:26px;
+  padding:0 9px;
+  border:1px solid #ffe0c7;
+  border-radius:999px;
+  background:#fff7f0;
+  color:#ff5a00;
+  font-size:11px;
+  font-weight:950;
+  line-height:24px;
+  cursor:pointer;
+  white-space:nowrap;
+}
+.drawerCopyBtn:hover{
+  background:#fff1e6;
+  border-color:#ffc59f;
+}
 .drawerActions{
   display:grid;
   grid-template-columns:1fr;
@@ -906,6 +924,11 @@ button{cursor:pointer}
   .inlineCopyBtn{
     right:8px;
     padding:0 8px;
+  }
+.drawerCopyBtn{
+    height:25px;
+    padding:0 8px;
+    font-size:10.5px;
   }
 }
 
@@ -1594,7 +1617,18 @@ function handleApiResult(data, query, resetFilters){
       summary:cleanUiText(data.summary || "AI가 사용자 의도, 위치 기준, 화성시 시설 DB를 함께 확인했습니다."),
       recommendations:lastRecommendations,
       related:lastRelated,
-      suggestions:data.suggestions || ["현재 위치와 거리","운영시간","예약 여부"]
+      suggestions:data.suggestions || ["현재 위치와 거리","운영시간","예약 여부"],
+      analysis:data.analysis || null
+    });
+  }else{
+    renderInfo({
+      intent:data.intent || analyzeQuery(query),
+      answer:data.answer || "조건에 맞는 추천 결과를 찾지 못했어요.",
+      summary:cleanUiText(data.summary || "추천 결과가 없습니다."),
+      recommendations:[],
+      related:[],
+      suggestions:data.suggestions || ["도서관 추천","공원 추천","체육시설 추천"],
+      analysis:data.analysis || null
     });
   }
 }
@@ -2065,11 +2099,11 @@ function drawerFacilityHtml(f){
       <div class="drawerInfo">
         <div class="drawerInfoRow"><span>기본 정보</span><b>${escapeHtml(getAreaGroup(f.district))} · ${escapeHtml(f.district || "-")} · ${escapeHtml(f.category || "-")}</b></div>
         <div class="drawerInfoRow">
-          <span>주소 <button class="inlineCopyBtn" onclick="copyTextValue('${escapeAttr(address)}','주소')">복사</button></span>
+          <span>주소 <button class="drawerCopyBtn" onclick="copyTextValue('${escapeAttr(address)}','주소')">복사</button></span>
           <b>${escapeHtml(address)}</b>
         </div>
         <div class="drawerInfoRow">
-          <span>전화 <button class="inlineCopyBtn" onclick="copyTextValue('${escapeAttr(phone)}','전화번호')">복사</button></span>
+          <span>전화 <button class="drawerCopyBtn" onclick="copyTextValue('${escapeAttr(phone)}','전화번호')">복사</button></span>
           <b>${escapeHtml(phone)}</b>
         </div>
       </div>
