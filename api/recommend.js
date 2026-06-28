@@ -304,7 +304,9 @@ function extractPlaceCandidate(message){
     const m = msg.match(p);
     if(m){
       const cand = trimLocationPhrase(m[1]);
-      if(cand && cand.length >= 2 && !normalizeDistrictHint(cand) && !normalizeAreaHint(cand)) return cand;
+      if(cand && cand.length >= 2 && !normalizeDistrictHint(cand) && !normalizeAreaHint(cand)){
+        return cand;
+      }
     }
   }
   return null;
@@ -378,8 +380,28 @@ async function searchKakaoAddress(query){
   }
   return null;
 }
+function expandPlaceSearchVariants(query){
+  const q = String(query || "").trim();
+  const compact = q.replace(/\s/g,"");
+  const variants = [q];
+
+  // 학교 약칭 보강: 반월초 -> 반월초등학교, 안화고 -> 안화고등학교
+  if(/[가-힣0-9]+초$/.test(compact)) variants.push(compact.replace(/초$/,"초등학교"));
+  if(/[가-힣0-9]+중$/.test(compact)) variants.push(compact.replace(/중$/,"중학교"));
+  if(/[가-힣0-9]+고$/.test(compact)) variants.push(compact.replace(/고$/,"고등학교"));
+
+  // 이미 학교가 들어간 경우도 공백 제거 버전을 추가
+  if(/초등학교|중학교|고등학교|대학교|역|공원|센터|도서관/.test(compact)) variants.push(compact);
+
+  return unique(variants.filter(Boolean));
+}
 async function searchKakaoKeyword(query){
-  const variants = unique([query, query.includes("화성") ? query : `화성시 ${query}`, query.includes("경기도") ? query : `경기도 화성시 ${query}`]);
+  const baseVariants = expandPlaceSearchVariants(query);
+  const variants = unique(baseVariants.flatMap(v=>[
+    v,
+    v.includes("화성") ? v : `화성시 ${v}`,
+    v.includes("경기도") ? v : `경기도 화성시 ${v}`
+  ]));
   for(const q of variants){
     const data = await kakaoLocalRequest("keyword", {query:q, size:10});
     const docs = data?.documents || [];
@@ -862,6 +884,80 @@ function makeNaturalAnswer(message, analysis, recs, userContext){
 
   return polishAnswer(`${safeLead}<br>${basisText} ${area} 안에서 이용하기 좋은 시설을 우선 골라봤어요. 가장 먼저 볼 만한 곳은 <b>${first.name}</b>입니다.`);
 }
+
+function buildLocalOnlyAnalysis(message){
+  const local = localQueryHints(message);
+  const addr = extractAddressCandidate(message);
+  const place = extractPlaceCandidate(message);
+  const targetLocationText = addr || place || "none";
+  const targetLocationType = addr ? "address" : (place ? "place" : "none");
+  return {
+    requestType:"recommend",
+    canRecommend:true,
+    mainIntent: local.tokens?.length ? local.tokens.join(", ") : "공공시설 추천",
+    contextSummary:"사용자 문장과 현재 위치 정보를 기준으로 시설을 찾습니다.",
+    recommendationBasis: targetLocationText !== "none" ? "reference_location" : "purpose_only",
+    targetCategories:local.categories,
+    avoidCategories:[],
+    targetDistricts:local.districts,
+    targetLocationText,
+    targetLocationType,
+    keywords:local.tokens,
+    missingData:[],
+    constraints:{
+      near:local.near,
+      indoor:local.indoor,
+      lowCrowd:local.lowCrowd,
+      reservable:local.reservable,
+      freePreferred:local.freePreferred
+    },
+    answerLead:"말씀하신 조건을 기준으로 화성시 시설 DB에서 찾아봤어요.",
+    followUpSuggestions:["거리 보기","운영시간","예약 여부"]
+  };
+}
+async function smartFallback(message,userContext={}, reason="fallback"){
+  const local = localQueryHints(message);
+  const analysis = buildLocalOnlyAnalysis(message);
+  const kakaoLocation = await resolveKakaoLocation(message, analysis, local);
+  const resolved = resolveRecommendationContext(userContext, analysis, local, kakaoLocation);
+  const effectiveUserContext = resolved.userContext;
+  analysis.recommendationBasis = resolved.usedBasis === "outside_gps_no_area" ? analysis.recommendationBasis : resolved.usedBasis;
+
+  const {intent,candidates} = searchFacilities(message,analysis,effectiveUserContext);
+  const recs = candidates.slice(0,3).map(f=>enrich(f,effectiveUserContext,buildReasons(f,intent,effectiveUserContext)));
+  const related = buildRelated(recs,intent,effectiveUserContext);
+
+  if(!recs.length){
+    return {
+      mode:"system_fallback",
+      responseType:"db_gap",
+      answer:kakaoLocation
+        ? `${kakaoLocation.name || kakaoLocation.originalText} 주변 기준 위치는 확인했지만, 현재 시설 DB에서 바로 연결되는 추천 시설을 찾지 못했어요.`
+        : "현재 H-MATE 시설 DB만으로는 바로 추천하기 어려운 요청이에요. 공원, 도서관, 체육시설, 문화시설처럼 등록된 공공시설 범위 안에서 다시 물어보시면 더 정확히 안내드릴게요.",
+      summary:"현재 DB에서 직접 추천 가능한 시설이 없습니다.",
+      intent,
+      selectedFacility:null,
+      recommendations:[],
+      related:[],
+      suggestions:["도서관 추천","공원 추천","체육시설 추천"],
+      analysis:{...analysis, locationResolution:resolved, referenceLocation:kakaoLocation || null, fallbackReason:reason}
+    };
+  }
+
+  return {
+    mode:"system_fallback",
+    responseType:"recommend",
+    answer:polishAnswer(makeNaturalAnswer(message,analysis,recs,effectiveUserContext)),
+    summary:kakaoLocation ? `${kakaoLocation.name || kakaoLocation.originalText} 기준으로 가까운 시설을 우선 추천했습니다.` : "화성시 시설 DB를 기준으로 목적과 지역을 반영해 추천했습니다.",
+    intent,
+    selectedFacility:null,
+    recommendations:recs,
+    related,
+    suggestions:["거리 보기","운영시간","예약 여부"],
+    analysis:{...analysis, locationResolution:resolved, referenceLocation:kakaoLocation || null, fallbackReason:reason}
+  };
+}
+
 function fallback(message,userContext){
   const local = localQueryHints(message);
   const fakeAnalysis = {
@@ -1011,7 +1107,7 @@ export default async function handler(req,res){
   }
 
   if(!process.env.OPENAI_API_KEY){
-    res.status(200).json(fallback(message,userContext));
+    res.status(200).json(await smartFallback(message,userContext,"no_openai_key"));
     return;
   }
 
@@ -1022,6 +1118,13 @@ export default async function handler(req,res){
     const client = new OpenAI({apiKey: process.env.OPENAI_API_KEY});
     const {analysis, usage} = await analyzeContextWithAI(client, {message, userContext, selected, history});
     const localHints = localQueryHints(message);
+    const localAddr = extractAddressCandidate(message);
+    const localPlace = extractPlaceCandidate(message);
+    if((!analysis.targetLocationText || analysis.targetLocationText === "none") && (localAddr || localPlace)){
+      analysis.targetLocationText = localAddr || localPlace;
+      analysis.targetLocationType = localAddr ? "address" : "place";
+      analysis.recommendationBasis = "reference_location";
+    }
     const kakaoLocation = await resolveKakaoLocation(message, analysis, localHints);
 
     if(localHints.dbLimit?.toilet){
@@ -1192,6 +1295,6 @@ export default async function handler(req,res){
     });
   }catch(err){
     console.error(err);
-    res.status(200).json(fallback(message,userContext));
+    res.status(200).json(await smartFallback(message,userContext,"api_error"));
   }
 }
