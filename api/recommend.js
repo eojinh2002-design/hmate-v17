@@ -485,6 +485,74 @@ function buildRelated(recs,intent,userContext){
 function findFacilityById(id){
   return facilities.find(f=>Number(f.id)===Number(id));
 }
+
+function wantsNewRecommendation(message){
+  const q = compactText(message);
+  if(!q) return false;
+
+  const recommendationWords = [
+    "추천","다른곳","딴곳","또갈","어디로갈까","어디갈까","갈만한","갈만한곳",
+    "갈곳","가볼만한","근처","주변","끝나고","다음으로","이후에","코스",
+    "혼잡하지","혼잡하지않은","한산","여유","조용한","덜붐비"
+  ];
+  const categoryWords = [
+    "도서관","공원","산책","축구","풋살","운동","체육","아이","어린이","가족",
+    "문화","공연","행사","전시","공부","책","독서","대관","회의"
+  ];
+
+  if(recommendationWords.some(w=>q.includes(compactText(w)))) return true;
+  if(categoryWords.some(w=>q.includes(compactText(w))) && /(어디|갈까|추천|근처|주변|끝나고|다음)/.test(q)) return true;
+  return false;
+}
+function wantsSelectedFacilityFact(message){
+  const q = compactText(message);
+  if(!q) return false;
+  const factWords = ["거리","주소","전화","번호","운영시간","영업시간","몇시","예약","요금","가격","무료","혼잡도"];
+  const recommendationSignals = ["추천","다른곳","어디","갈까","근처","주변","끝나고","한산","조용한","덜붐비"];
+  return factWords.some(w=>q.includes(compactText(w))) && !recommendationSignals.some(w=>q.includes(compactText(w)));
+}
+function applyFollowupRecommendationContext(message, analysis, selected, localHints){
+  if(!wantsNewRecommendation(message)) return analysis;
+
+  const next = {
+    ...analysis,
+    requestType:"recommend",
+    canRecommend:true,
+    recommendationBasis:analysis.recommendationBasis || "purpose_only",
+    targetCategories:[...(analysis.targetCategories || [])],
+    targetDistricts:[...(analysis.targetDistricts || [])],
+    keywords:[...(analysis.keywords || [])],
+    constraints:{...(analysis.constraints || {})}
+  };
+
+  const localCategories = localHints?.categories || [];
+  const localTokens = localHints?.tokens || [];
+  next.targetCategories = unique([...next.targetCategories, ...localCategories]);
+  next.keywords = unique([...next.keywords, ...localTokens]);
+
+  if(localHints?.lowCrowd || compactText(message).includes("한산") || compactText(message).includes("혼잡하지")){
+    next.constraints.lowCrowd = true;
+  }
+  if(localHints?.indoor) next.constraints.indoor = true;
+  if(localHints?.reservable) next.constraints.reservable = true;
+  if(localHints?.freePreferred) next.constraints.freePreferred = true;
+  if(localHints?.near || compactText(message).includes("끝나고") || compactText(message).includes("근처") || compactText(message).includes("주변")){
+    next.constraints.near = true;
+  }
+
+  // 사용자가 새 지역을 직접 말하지 않은 후속 추천이면,
+  // 방금 선택된 시설의 동/권역을 기준으로 이어서 추천한다.
+  const hasDirectLocation = (localHints?.districts || []).length || (analysis.targetDistricts || []).length;
+  if(selected && !hasDirectLocation){
+    next.targetDistricts = unique([...(next.targetDistricts || []), selected.district, getAreaGroup(selected.district)]);
+    next.recommendationBasis = "destination_area";
+    const selectedName = selected.name ? `${selected.name} 이후에 ` : "";
+    next.answerLead = `${selectedName}이어서 갈 만한 곳을 같은 생활권 기준으로 찾아볼게요.`;
+  }
+
+  return next;
+}
+
 function referencedFacility(message, selectedFacilityId, lastRecommendationIds=[], lastRelatedIds=[]){
   const q = String(message||"").replace(/\s/g,"");
   const ids = [...lastRecommendationIds, ...lastRelatedIds].map(Number);
@@ -719,8 +787,9 @@ export default async function handler(req,res){
 
   try{
     const client = new OpenAI({apiKey: process.env.OPENAI_API_KEY});
-    const {analysis, usage} = await analyzeContextWithAI(client, {message, userContext, selected, history});
+    let {analysis, usage} = await analyzeContextWithAI(client, {message, userContext, selected, history});
     const localHints = localQueryHints(message);
+    analysis = applyFollowupRecommendationContext(message, analysis, selected, localHints);
 
     if(localHints.dbLimit?.toilet){
       res.status(200).json({
@@ -801,7 +870,7 @@ export default async function handler(req,res){
 
     analysis.recommendationBasis = resolved.usedBasis === "outside_gps_no_area" ? analysis.recommendationBasis : resolved.usedBasis;
 
-    if(analysis.requestType === "answer_selected" && selected){
+    if(analysis.requestType === "answer_selected" && selected && wantsSelectedFacilityFact(message)){
       const answer = selectedFactAnswer(message, selected, effectiveUserContext, analysis);
       const selectedEnriched = enrich(selected,effectiveUserContext,buildReasons(selected,localQueryHints(message),userContext));
       const lastRecs = unique(lastRecommendationIds.map(Number))
