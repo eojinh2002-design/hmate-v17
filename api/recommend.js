@@ -1005,6 +1005,72 @@ function fallback(message,userContext){
   };
 }
 
+
+function normalizeAnalysisShape(input={}, message=""){
+  const local = localQueryHints(message);
+  const addr = extractAddressCandidate(message);
+  const place = extractPlaceCandidate(message);
+  const localLocation = addr || place || "none";
+
+  const allowedRequestTypes = ["recommend","compare","answer_selected","clarify","db_gap","out_of_scope"];
+  const allowedBasis = ["gps","selected_area","home_area","work_area","destination_area","mentioned_area","mentioned_district","reference_location","purpose_only"];
+  const allowedLocationType = ["none","address","place","district","area","gps_context"];
+
+  const safe = {
+    requestType: allowedRequestTypes.includes(input.requestType) ? input.requestType : "recommend",
+    canRecommend: typeof input.canRecommend === "boolean" ? input.canRecommend : true,
+    mainIntent: String(input.mainIntent || local.tokens?.join(", ") || "공공시설 추천"),
+    contextSummary: String(input.contextSummary || "사용자 문장과 위치 기준을 바탕으로 시설을 찾습니다."),
+    recommendationBasis: allowedBasis.includes(input.recommendationBasis) ? input.recommendationBasis : (localLocation !== "none" ? "reference_location" : "purpose_only"),
+    targetCategories: Array.isArray(input.targetCategories) ? input.targetCategories.slice(0,6) : local.categories,
+    avoidCategories: Array.isArray(input.avoidCategories) ? input.avoidCategories.slice(0,6) : [],
+    targetDistricts: Array.isArray(input.targetDistricts) ? input.targetDistricts.slice(0,6) : local.districts,
+    targetLocationText: typeof input.targetLocationText === "string" && input.targetLocationText.trim() ? input.targetLocationText.trim() : localLocation,
+    targetLocationType: allowedLocationType.includes(input.targetLocationType) ? input.targetLocationType : (addr ? "address" : (place ? "place" : "none")),
+    keywords: Array.isArray(input.keywords) ? input.keywords.slice(0,10) : local.tokens,
+    missingData: Array.isArray(input.missingData) ? input.missingData.slice(0,6) : [],
+    constraints: {
+      near: Boolean(input.constraints?.near ?? local.near),
+      indoor: Boolean(input.constraints?.indoor ?? local.indoor),
+      lowCrowd: Boolean(input.constraints?.lowCrowd ?? local.lowCrowd),
+      reservable: Boolean(input.constraints?.reservable ?? local.reservable),
+      freePreferred: Boolean(input.constraints?.freePreferred ?? local.freePreferred)
+    },
+    answerLead: String(input.answerLead || "말씀하신 조건을 기준으로 화성시 시설 DB에서 찾아봤어요."),
+    followUpSuggestions: Array.isArray(input.followUpSuggestions) && input.followUpSuggestions.length
+      ? input.followUpSuggestions.slice(0,3)
+      : ["거리 보기","운영시간","예약 여부"]
+  };
+
+  if((!safe.targetLocationText || safe.targetLocationText === "none") && localLocation !== "none"){
+    safe.targetLocationText = localLocation;
+    safe.targetLocationType = addr ? "address" : "place";
+    safe.recommendationBasis = "reference_location";
+  }
+  return safe;
+}
+function parseAnalysisOrLocal(raw, message){
+  const text = String(raw || "").trim();
+  if(!text){
+    return {
+      analysis: normalizeAnalysisShape(buildLocalOnlyAnalysis(message), message),
+      parseError: "empty_output"
+    };
+  }
+  try{
+    return {
+      analysis: normalizeAnalysisShape(JSON.parse(text), message),
+      parseError: null
+    };
+  }catch(err){
+    // 모델 JSON이 잘리거나 깨져도 서비스는 멈추지 않고 로컬/카카오 위치검색 추천으로 이어간다.
+    return {
+      analysis: normalizeAnalysisShape(buildLocalOnlyAnalysis(message), message),
+      parseError: String(err?.message || err)
+    };
+  }
+}
+
 async function analyzeContextWithAI(client, {message, userContext, selected, history}){
   const response = await client.responses.create({
     model: process.env.OPENAI_MODEL || "gpt-5-mini",
@@ -1091,7 +1157,12 @@ async function analyzeContextWithAI(client, {message, userContext, selected, his
     }
   });
 
-  return {analysis: JSON.parse(response.output_text), usage: response.usage || null};
+  const parsed = parseAnalysisOrLocal(response.output_text, message);
+  return {
+    analysis: parsed.analysis,
+    usage: response.usage || null,
+    aiParseError: parsed.parseError
+  };
 }
 
 export default async function handler(req,res){
@@ -1116,7 +1187,7 @@ export default async function handler(req,res){
 
   try{
     const client = new OpenAI({apiKey: process.env.OPENAI_API_KEY});
-    const {analysis, usage} = await analyzeContextWithAI(client, {message, userContext, selected, history});
+    const {analysis, usage, aiParseError} = await analyzeContextWithAI(client, {message, userContext, selected, history});
     const localHints = localQueryHints(message);
     const localAddr = extractAddressCandidate(message);
     const localPlace = extractPlaceCandidate(message);
@@ -1138,7 +1209,7 @@ export default async function handler(req,res){
         recommendations:[],
         related:[],
         suggestions:["근처 공원","도서관 추천","체육시설 추천"],
-        analysis:{...analysis, referenceLocation:kakaoLocation || null},
+        analysis:{...analysis, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
         usage:{decision:usage}
       });
       return;
@@ -1155,7 +1226,7 @@ export default async function handler(req,res){
         recommendations:[],
         related:[],
         suggestions:["산책할 곳","운동할 곳","도서관 추천"],
-        analysis:{...analysis, referenceLocation:kakaoLocation || null},
+        analysis:{...analysis, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
         usage:{decision:usage}
       });
       return;
@@ -1198,7 +1269,7 @@ export default async function handler(req,res){
         recommendations:[],
         related:[],
         suggestions:["동탄 기준","병점 기준","봉담 기준"],
-        analysis:{...analysis, recommendationBasis:"outside_gps_no_area", locationResolution:resolved, referenceLocation:kakaoLocation || null},
+        analysis:{...analysis, recommendationBasis:"outside_gps_no_area", locationResolution:resolved, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
         usage:{decision:usage}
       });
       return;
@@ -1224,7 +1295,7 @@ export default async function handler(req,res){
         recommendations:lastRecs.length ? lastRecs : [selectedEnriched],
         related:buildRelated(lastRecs.length ? lastRecs : [selectedEnriched], localQueryHints(message), effectiveUserContext),
         suggestions:analysis.followUpSuggestions?.length ? analysis.followUpSuggestions : ["거리 보기","운영시간","예약 여부"],
-        analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null},
+        analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
         usage:{decision:usage}
       });
       return;
@@ -1252,7 +1323,7 @@ export default async function handler(req,res){
         recommendations:[],
         related:[],
         suggestions:analysis.followUpSuggestions?.length ? analysis.followUpSuggestions : ["도서관 추천","공원 추천","체육시설 추천"],
-        analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null},
+        analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
         usage:{decision:usage}
       });
       return;
@@ -1271,7 +1342,7 @@ export default async function handler(req,res){
           mode:"ai",
           responseType:"recommend",
           usage:{decision:usage},
-          analysis:{...(backup.analysis || {}), originalAnalysis:analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || backup.analysis?.referenceLocation || null}
+          analysis:{...(backup.analysis || {}), originalAnalysis:analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || backup.analysis?.referenceLocation || null, aiParseError:aiParseError || null}
         });
         return;
       }
@@ -1287,7 +1358,7 @@ export default async function handler(req,res){
         recommendations:[],
         related:[],
         suggestions:analysis.followUpSuggestions?.length ? analysis.followUpSuggestions : ["도서관 추천","공원 추천","체육시설 추천"],
-        analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null},
+        analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
         usage:{decision:usage}
       });
       return;
@@ -1303,7 +1374,7 @@ export default async function handler(req,res){
       recommendations:recs,
       related,
       suggestions:analysis.followUpSuggestions?.length ? analysis.followUpSuggestions : ["거리 보기","운영시간","예약 여부"],
-      analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null},
+      analysis:{...analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || null, aiParseError:aiParseError || null},
       usage:{decision:usage}
     });
   }catch(err){
