@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>H-MATE | 검색 결과 화면 v20</title>
+<title>H-MATE | 추천 이유 정렬 v21</title>
 <style>
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css");
 :root {
@@ -203,8 +203,51 @@ button{cursor:pointer}
   border-color:#ffc59f;
   color:#ff5a00;
 }
+
+
+
+/* v21 recommendation reason vertical centering */
 .detailBox.followOnlyRemoved{
-  min-height:100%;
+  display:flex;
+  flex-direction:column;
+}
+
+.detailBox.followOnlyRemoved .reasonList{
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:12px;
+}
+
+.detailBox.followOnlyRemoved .reason{
+  min-height:44px;
+  display:flex;
+  align-items:center;
+  padding:10px 14px;
+}
+
+.detailBox.followOnlyRemoved .reason::before{
+  content:"✓";
+  width:22px;
+  height:22px;
+  min-width:22px;
+  border-radius:50%;
+  background:var(--orange);
+  color:#fff;
+  display:grid;
+  place-items:center;
+  font-size:12px;
+  font-weight:900;
+  margin-right:8px;
+}
+
+.detailBox.followOnlyRemoved .reason{
+  color:#344054;
+}
+
+.detailBox.followOnlyRemoved .reason{
+  font-weight:800;
 }
 
 </style>
@@ -1013,7 +1056,7 @@ function detailHtml(f,result){
       <div class="detailBox followOnlyRemoved">
         <h3>추천 이유</h3>
         <div class="reasonList">
-          ${reasons.length ? reasons.map(r=>`<div class="reason">✓ ${escapeHtml(String(r))}</div>`).join("") : `<div class="reason">✓ 사용자의 목적과 시설 정보가 일치합니다.</div>`}
+          ${reasons.length ? reasons.map(r=>`<div class="reason">${escapeHtml(String(r))}</div>`).join("") : `<div class="reason">사용자의 목적과 시설 정보가 일치합니다.</div>`}
         </div>
 
       </div>
