@@ -414,22 +414,9 @@ async function searchKakaoKeyword(query){
   return null;
 }
 async function resolveKakaoLocation(message, analysis={}, localHints={}){
-  const candidates = localReferenceLocationHints(message, analysis, localHints);
-  if(!candidates.length || !process.env.KAKAO_REST_API_KEY) return null;
-
-  for(const cand of candidates.slice(0,3)){
-    let found = null;
-    if(cand.type === "address" || looksLikeAddress(cand.text)){
-      found = await searchKakaoAddress(cand.text);
-      if(!found) found = await searchKakaoKeyword(cand.text);
-    }else{
-      found = await searchKakaoKeyword(cand.text);
-      if(!found) found = await searchKakaoAddress(cand.text);
-    }
-    if(found && found.isHwaseong){
-      return {...found, originalText:cand.text, source:cand.source};
-    }
-  }
+  // v29-2.5 안정화: 지도/카카오 위치 검색은 일단 비활성화.
+  // 이유: 지도 검색 도입 후 추천 카드가 비거나 JSON 파싱/렌더링 문제가 잦아져
+  // 친구 테스트 전 단계에서는 자연어+읍면동+권역 추천만 안정화한다.
   return null;
 }
 
@@ -896,7 +883,7 @@ function buildLocalOnlyAnalysis(message){
     canRecommend:true,
     mainIntent: local.tokens?.length ? local.tokens.join(", ") : "공공시설 추천",
     contextSummary:"사용자 문장과 현재 위치 정보를 기준으로 시설을 찾습니다.",
-    recommendationBasis: targetLocationText !== "none" ? "reference_location" : "purpose_only",
+    recommendationBasis: "purpose_only",
     targetCategories:local.categories,
     avoidCategories:[],
     targetDistricts:local.districts,
@@ -931,9 +918,7 @@ async function smartFallback(message,userContext={}, reason="fallback"){
     return {
       mode:"system_fallback",
       responseType:"db_gap",
-      answer:kakaoLocation
-        ? `${kakaoLocation.name || kakaoLocation.originalText} 주변 기준 위치는 확인했지만, 현재 시설 DB에서 바로 연결되는 추천 시설을 찾지 못했어요.`
-        : "현재 H-MATE 시설 DB만으로는 바로 추천하기 어려운 요청이에요. 공원, 도서관, 체육시설, 문화시설처럼 등록된 공공시설 범위 안에서 다시 물어보시면 더 정확히 안내드릴게요.",
+      answer:"현재 H-MATE 시설 DB만으로는 바로 추천하기 어려운 요청이에요. 공원, 도서관, 체육시설, 문화시설처럼 등록된 공공시설 범위 안에서 다시 물어보시면 더 정확히 안내드릴게요.",
       summary:"현재 DB에서 직접 추천 가능한 시설이 없습니다.",
       intent,
       selectedFacility:null,
@@ -948,7 +933,7 @@ async function smartFallback(message,userContext={}, reason="fallback"){
     mode:"system_fallback",
     responseType:"recommend",
     answer:polishAnswer(makeNaturalAnswer(message,analysis,recs,effectiveUserContext)),
-    summary:kakaoLocation ? `${kakaoLocation.name || kakaoLocation.originalText} 기준으로 가까운 시설을 우선 추천했습니다.` : "화성시 시설 DB를 기준으로 목적과 지역을 반영해 추천했습니다.",
+    summary:"화성시 시설 DB를 기준으로 목적과 지역을 반영해 추천했습니다.",
     intent,
     selectedFacility:null,
     recommendations:recs,
@@ -1045,7 +1030,7 @@ function normalizeAnalysisShape(input={}, message=""){
   if((!safe.targetLocationText || safe.targetLocationText === "none") && localLocation !== "none"){
     safe.targetLocationText = localLocation;
     safe.targetLocationType = addr ? "address" : "place";
-    safe.recommendationBasis = "reference_location";
+    safe.recommendationBasis = "purpose_only";
   }
   return safe;
 }
@@ -1083,7 +1068,7 @@ async function analyzeContextWithAI(client, {message, userContext, selected, his
           "사용자의 현재 문장뿐 아니라 최근 대화 맥락을 함께 읽고 진짜 의도와 추천 기준을 판단한다.",
           "추천 기준 우선순위는 현재 문장에서 직접 말한 정확한 읍면동 > 현재 문장에서 직접 말한 권역/생활지명 > 대화 맥락의 집/목적지/가려는 곳 > 선택 권역 > GPS 현재 위치 > 목적 중심이다.",
           "동탄6동, 동탄 6동, 향남읍, 봉담읍처럼 정확한 읍면동이 나오면 넓은 권역으로 뭉개지 말고 그 읍면동 기준으로 판단한다.",
-          "10용사로 286 같은 주소, 푸른초·병점역·동탄 남광장 같은 장소명은 targetLocationText에 그대로 추출한다. 지도 API로 좌표를 찾을 수 있게 주소/장소명만 짧게 넣는다.",
+          "주소나 장소명은 참고만 하고, 지도 API 좌표 검색 없이 현재 시설 DB·읍면동·권역 기준으로 추천한다.",
           "targetLocationText가 없으면 문자열 none을 넣고, targetLocationType은 none으로 둔다.",
           "사용자가 사는 곳, 일하는 곳, 퇴근길, 집 근처, 목적지, 현재 위치 허용 여부 같은 생활 맥락을 해석한다.",
           "H-MATE는 화성시 공공시설 DB 안에서만 추천한다. DB 밖 시설명, 주소, 전화, 운영시간은 지어내지 않는다.",
@@ -1194,7 +1179,7 @@ export default async function handler(req,res){
     if((!analysis.targetLocationText || analysis.targetLocationText === "none") && (localAddr || localPlace)){
       analysis.targetLocationText = localAddr || localPlace;
       analysis.targetLocationType = localAddr ? "address" : "place";
-      analysis.recommendationBasis = "reference_location";
+      analysis.recommendationBasis = "purpose_only";
     }
     const kakaoLocation = await resolveKakaoLocation(message, analysis, localHints);
 
