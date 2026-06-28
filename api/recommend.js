@@ -1264,11 +1264,24 @@ export default async function handler(req,res){
     const responseType = analysis.requestType === "compare" ? "compare" : "recommend";
 
     if(!recs.length){
+      const backup = await smartFallback(message, effectiveUserContext, "no_candidates_after_ai");
+      if(Array.isArray(backup.recommendations) && backup.recommendations.length){
+        res.status(200).json({
+          ...backup,
+          mode:"ai",
+          responseType:"recommend",
+          usage:{decision:usage},
+          analysis:{...(backup.analysis || {}), originalAnalysis:analysis, locationResolution:resolved || null, referenceLocation:kakaoLocation || backup.analysis?.referenceLocation || null}
+        });
+        return;
+      }
+
+      const basisName = effectiveUserContext.basisPlaceName || effectiveUserContext.basisDistrict || effectiveUserContext.selectedAreaGroup || "입력한 조건";
       res.status(200).json({
         mode:"ai",
         responseType:"db_gap",
-        answer:polishAnswer(analysis.answerLead || "말씀하신 상황은 이해했지만, 현재 H-MATE 시설 DB에서 바로 추천할 수 있는 시설을 찾지 못했어요."),
-        summary:analysis.contextSummary,
+        answer:polishAnswer(`${basisName} 기준으로 찾는 상황은 이해했지만, 현재 H-MATE 시설 DB에서 바로 추천할 수 있는 시설을 찾지 못했어요. 도서관, 공원, 체육시설처럼 등록된 공공시설 범위로 다시 물어보시면 더 정확히 찾아볼게요.`),
+        summary:"현재 DB에서 직접 추천 가능한 시설이 없습니다.",
         intent,
         selectedFacility:null,
         recommendations:[],
