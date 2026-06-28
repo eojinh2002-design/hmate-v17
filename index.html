@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>H-MATE | 2단계 AI 판단 v25</title>
+<title>H-MATE | 상세 UX 개선 v26</title>
 <style>
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css");
 :root {
@@ -728,6 +728,187 @@ button{cursor:pointer}
   }
 }
 
+
+/* v26 detail UX polish */
+.quick.resultMode{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:8px;
+}
+.quick.resultMode button{
+  min-width:0;
+  max-width:100%;
+  width:100%;
+  height:40px;
+  padding:0 8px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  display:block;
+  line-height:40px;
+  text-align:center;
+  font-size:12px;
+  letter-spacing:-.03em;
+}
+
+.detailInfoItem.copyable{
+  position:relative;
+  padding-right:74px;
+}
+.inlineCopyBtn{
+  position:absolute;
+  top:10px;
+  right:10px;
+  height:26px;
+  padding:0 9px;
+  border:1px solid #ffe0c7;
+  border-radius:999px;
+  background:#fff7f0;
+  color:#ff5a00;
+  font-size:11px;
+  font-weight:950;
+  line-height:24px;
+  cursor:pointer;
+}
+.inlineCopyBtn:hover{
+  background:#fff1e6;
+  border-color:#ffc59f;
+}
+.mainDetailBox .actionRow.singleAction{
+  grid-template-columns:1fr;
+}
+.mainDetailBox .actionRow.singleAction button{
+  width:100%;
+}
+
+.relatedSectionHead{
+  margin-bottom:14px;
+}
+.relatedSectionHead p{
+  display:none;
+}
+.relatedCard{
+  cursor:pointer;
+}
+.relatedCard .previewHint{
+  display:none;
+}
+.relatedCard:hover{
+  transform:translateY(-2px);
+  border-color:#ffc59f;
+  box-shadow:0 14px 28px rgba(255,107,0,.10);
+}
+
+.relatedDrawer{
+  position:fixed!important;
+  inset:0!important;
+  width:auto!important;
+  max-height:none!important;
+  padding:20px!important;
+  z-index:80!important;
+  display:flex;
+  align-items:flex-end;
+  justify-content:center;
+  overflow:auto!important;
+  border:0!important;
+  border-radius:0!important;
+  background:rgba(15,23,42,.28)!important;
+  box-shadow:none!important;
+  animation:fadeIn .16s ease-out!important;
+  backdrop-filter:blur(3px);
+}
+.relatedDrawer.hidden{
+  display:none!important;
+}
+.relatedSheet{
+  width:min(720px,100%);
+  max-height:min(78vh,720px);
+  overflow:auto;
+  padding:22px;
+  border:1px solid #ffd2b3;
+  border-radius:28px 28px 24px 24px;
+  background:#fff;
+  box-shadow:0 30px 80px rgba(16,24,40,.28);
+  animation:sheetUp .22s ease-out;
+}
+@keyframes fadeIn{
+  from{opacity:0}
+  to{opacity:1}
+}
+@keyframes sheetUp{
+  from{opacity:0;transform:translateY(28px)}
+  to{opacity:1;transform:translateY(0)}
+}
+.drawerTop{
+  margin-bottom:14px;
+}
+.drawerTop h3{
+  font-size:22px;
+  word-break:keep-all;
+  overflow-wrap:anywhere;
+}
+.drawerClose{
+  flex:0 0 auto;
+}
+.drawerInfo{
+  position:relative;
+  padding:14px;
+}
+.drawerInfoRow{
+  margin-top:9px;
+  padding-top:9px;
+  border-top:1px solid #edf1f6;
+}
+.drawerInfoRow:first-child{
+  margin-top:0;
+  padding-top:0;
+  border-top:0;
+}
+.drawerInfoRow span{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  color:#98a2b3;
+  font-size:11.5px;
+  font-weight:950;
+  margin-bottom:4px;
+}
+.drawerInfoRow b{
+  display:block;
+  color:#344054;
+  font-size:13.5px;
+  line-height:1.5;
+  word-break:keep-all;
+  overflow-wrap:anywhere;
+}
+.drawerActions{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:8px;
+}
+.drawerActions .secondary{
+  display:none;
+}
+@media(max-width:760px){
+  .relatedDrawer{
+    padding:12px!important;
+    align-items:flex-end;
+  }
+  .relatedSheet{
+    max-height:82vh;
+    padding:18px;
+    border-radius:24px 24px 20px 20px;
+  }
+  .detailInfoItem.copyable{
+    padding-right:66px;
+  }
+  .inlineCopyBtn{
+    right:8px;
+    padding:0 8px;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -900,13 +1081,64 @@ const resultQuickChips = [
   "운영시간",
   "예약 여부"
 ];
+
+function shortChipLabel(text){
+  const raw = String(text || "").trim();
+  const q = raw.replace(/\s/g,"");
+  if(!q) return "다시 묻기";
+  if(q.includes("거리") || q.includes("얼마") || q.includes("몇km") || q.includes("현재위치")) return "거리 보기";
+  if(q.includes("운영") || q.includes("시간") || q.includes("몇시")) return "운영시간";
+  if(q.includes("예약")) return "예약 여부";
+  if(q.includes("요금") || q.includes("무료") || q.includes("비용") || q.includes("돈")) return "요금 확인";
+  if(q.includes("혼잡") || q.includes("한산") || q.includes("여유")) return "한산한 곳";
+  if(q.includes("주소") || q.includes("위치")) return "주소 확인";
+  if(q.includes("전화") || q.includes("연락")) return "전화번호";
+  if(q.includes("다른") || q.includes("대안") || q.includes("다시") || q.includes("추천")) return "다른 시설";
+  if(q.includes("실내") || q.includes("비") || q.includes("더워") || q.includes("시원")) return "실내 추천";
+  const compact = raw.replace(/[“”"'‘’]/g,"").replace(/\s+/g," ");
+  return compact.length > 8 ? compact.slice(0,8) + "…" : compact;
+}
+function normalizeQuickItems(items){
+  const source = Array.isArray(items) ? items : [];
+  const result = [];
+  const seen = new Set();
+  source.forEach(original => {
+    const text = String(original || "").trim();
+    if(!text) return;
+    const label = shortChipLabel(text);
+    if(seen.has(label)) return;
+    seen.add(label);
+    result.push({label, query:text});
+  });
+  ["거리 보기","운영시간","예약 여부"].forEach(label=>{
+    if(result.length < 3 && !seen.has(label)){
+      seen.add(label);
+      result.push({label, query:label});
+    }
+  });
+  return result.slice(0,3);
+}
+function copyTextValue(value, label="정보"){
+  const text = String(value || "").trim();
+  if(!text || text === "확인 필요" || text === "주소 정보 없음"){
+    showToast(`${label} 정보가 아직 없습니다.`);
+    return;
+  }
+  navigator.clipboard?.writeText(text).then(()=>{
+    showToast(`${label}을 복사했습니다.`);
+  }).catch(()=>{
+    showToast("복사에 실패했습니다. 직접 선택해서 복사해주세요.");
+  });
+}
+
 function setQuickChips(items = defaultQuickChips, label = "자주 쓰는 질문", mode = "default"){
   const guide = document.getElementById("quickGuide");
   const wrap = document.getElementById("quickChips");
   if(!wrap) return;
   if(guide) guide.textContent = label;
   wrap.classList.toggle("resultMode", mode === "result");
-  wrap.innerHTML = items.slice(0,5).map(q => `<button onclick="quickAsk('${escapeAttr(q)}')">${escapeHtml(q)}</button>`).join("");
+  const chips = mode === "result" ? normalizeQuickItems(items) : normalizeQuickItems(items).slice(0,5);
+  wrap.innerHTML = chips.map(c => `<button title="${escapeAttr(c.query)}" onclick="quickAsk('${escapeAttr(c.query)}')">${escapeHtml(c.label)}</button>`).join("");
 }
 function formatLocationTag(loc){
   if(!loc) return "위치 기준 없음";
@@ -1135,8 +1367,8 @@ function renderAiGuidancePanel(data){
       <div class="scopeGrid">
         ${suggestions.slice(0,3).map(s=>`
           <button class="scopeOption" onclick="quickAsk('${escapeAttr(s)}')">
-            <b>${escapeHtml(s)}</b>
-            <span>이 조건으로 다시 찾아보기</span>
+            <b>${escapeHtml(shortChipLabel(s))}</b>
+            <span>${escapeHtml(s)}</span>
           </button>
         `).join("")}
       </div>
@@ -1248,6 +1480,9 @@ function sanitizeUserAnswer(text){
     .replace(/현재는\s*AI\s*API\s*연결\s*전이라\s*시스템\s*추천으로\s*표시됩니다\.?/g, "")
     .replace(/API\s*서버가\s*없어서\s*로컬\s*추천으로\s*처리했습니다\.?/g, "")
     .replace(/배포\s*후\s*API\s*키를\s*넣으면[^<\n]*/g, "")
+    .replace(/현재\s*위치는\s*위도[^.。<\n]*[.。]?/g, "현재 위치 기준으로 계산했습니다.")
+    .replace(/위도\s*-?\d+(?:\.\d+)?\s*,?\s*경도\s*-?\d+(?:\.\d+)?[^.。<\n]*[.。]?/g, "현재 위치 기준으로 계산했습니다.")
+    .replace(/\s{2,}/g, " ")
     .trim();
 }
 function handleApiResult(data, query, resetFilters){
@@ -1637,6 +1872,8 @@ function detailHtml(f,result){
   const hours = f.hours || "확인 필요";
   const fee = f.fee || "확인 필요";
   const reserve = f.reservable ? "예약 확인 필요" : "별도 확인";
+  const address = f.address || "주소 정보 없음";
+  const phone = f.phone || "확인 필요";
   return `
     <div class="detailGrid">
       <div class="detailBox mainDetailBox">
@@ -1669,16 +1906,23 @@ function detailHtml(f,result){
         </div>
 
         <div class="detailInfoGrid">
-          <div class="detailInfoItem wide"><span>주소</span><b>${escapeHtml(f.address || "주소 정보 없음")}</b></div>
-          <div class="detailInfoItem"><span>전화</span><b>${escapeHtml(f.phone || "확인 필요")}</b></div>
+          <div class="detailInfoItem wide copyable">
+            <span>주소</span>
+            <b>${escapeHtml(address)}</b>
+            <button class="inlineCopyBtn" onclick="copyTextValue('${escapeAttr(address)}','주소')">복사</button>
+          </div>
+          <div class="detailInfoItem copyable">
+            <span>전화</span>
+            <b>${escapeHtml(phone)}</b>
+            <button class="inlineCopyBtn" onclick="copyTextValue('${escapeAttr(phone)}','전화번호')">복사</button>
+          </div>
           <div class="detailInfoItem"><span>분류</span><b>${escapeHtml(f.category || "-")} / ${escapeHtml(f.subCategory || "-")}</b></div>
           <div class="detailInfoItem"><span>권역</span><b>${escapeHtml(area)}</b></div>
           <div class="detailInfoItem"><span>지역</span><b>${escapeHtml(f.district || "-")}</b></div>
         </div>
 
-        <div class="actionRow">
+        <div class="actionRow singleAction">
           <button onclick="openReserve()">예약 / 이용 안내</button>
-          <button class="secondary" onclick="copyFacility()">정보 복사</button>
         </div>
       </div>
       <div class="detailBox followOnlyRemoved">
@@ -1696,17 +1940,16 @@ function relatedHtml(list){
     <div class="detailBox relatedSectionBox">
       <div class="relatedSectionHead">
         <div>
-          <h3>함께 볼 만한 관련시설</h3>
-          <p>클릭하면 메인 상세정보가 바뀌지 않고 미리보기 탭으로 열립니다.</p>
+          <h3>근처에서 함께 볼 만한 시설</h3>
         </div>
       </div>
       <div class="relatedGrid">
         ${list.map(f=>{
           const loc = f.locationMeta || getLocationMeta(f);
           return `
-          <div class="relatedCard" onclick="previewRelatedFacility(${f.id})">
+          <div class="relatedCard" onclick="previewRelatedFacility(${f.id})" title="관련시설 미리보기">
             <div class="relatedIcon">${categoryIcon(f.category)}</div>
-            <div><b>${escapeHtml(f.name)}</b><p>${escapeHtml(f.district)} · ${escapeHtml(f.category)} · ${escapeHtml(formatLocationTag(loc))}</p><div class="previewHint">미리보기 열기</div></div>
+            <div><b>${escapeHtml(f.name)}</b><p>${escapeHtml(f.district)} · ${escapeHtml(f.category)} · ${escapeHtml(formatLocationTag(loc))}</p></div>
             <span class="badge ${crowdClass(f.crowd)}">${escapeHtml(f.crowd || "정보")}</span>
           </div>`;
         }).join("")}
@@ -1719,28 +1962,38 @@ function drawerFacilityHtml(f){
   const hours = f.hours || "확인 필요";
   const fee = f.fee || "확인 필요";
   const reserve = f.reservable ? "예약 확인 필요" : "별도 확인";
+  const address = f.address || "주소 정보 없음";
+  const phone = f.phone || "확인 필요";
   return `
-    <div class="drawerTop">
-      <div>
-        <span class="drawerLabel">관련시설 미리보기</span>
-        <h3>${escapeHtml(f.name)}</h3>
+    <div class="relatedSheet" onclick="event.stopPropagation()">
+      <div class="drawerTop">
+        <div>
+          <span class="drawerLabel">관련시설 미리보기</span>
+          <h3>${escapeHtml(f.name)}</h3>
+        </div>
+        <button class="drawerClose" onclick="closeRelatedDrawer()" aria-label="미리보기 닫기">×</button>
       </div>
-      <button class="drawerClose" onclick="closeRelatedDrawer()">×</button>
-    </div>
-    <div class="drawerMeta">
-      <div class="detailSummaryItem primary"><span class="summaryLabel">거리</span><span class="summaryValue">${escapeHtml(formatLocationTag(loc))}</span></div>
-      <div class="detailSummaryItem"><span class="summaryLabel">운영시간</span><span class="summaryValue">${escapeHtml(hours)}</span></div>
-      <div class="detailSummaryItem"><span class="summaryLabel">요금</span><span class="summaryValue">${escapeHtml(fee)}</span></div>
-      <div class="detailSummaryItem"><span class="summaryLabel">예약</span><span class="summaryValue">${escapeHtml(reserve)}</span></div>
-    </div>
-    <div class="drawerInfo">
-      <b>${escapeHtml(getAreaGroup(f.district))} · ${escapeHtml(f.district || "-")} · ${escapeHtml(f.category || "-")}</b><br>
-      ${escapeHtml(f.address || "주소 정보 없음")}<br>
-      전화: ${escapeHtml(f.phone || "확인 필요")}
-    </div>
-    <div class="drawerActions">
-      <button onclick="promoteRelatedFacility(${Number(f.id)})">이 시설을 메인으로 보기</button>
-      <button class="secondary" onclick="closeRelatedDrawer()">닫기</button>
+      <div class="drawerMeta">
+        <div class="detailSummaryItem primary"><span class="summaryLabel">거리</span><span class="summaryValue">${escapeHtml(formatLocationTag(loc))}</span></div>
+        <div class="detailSummaryItem"><span class="summaryLabel">운영시간</span><span class="summaryValue">${escapeHtml(hours)}</span></div>
+        <div class="detailSummaryItem"><span class="summaryLabel">요금</span><span class="summaryValue">${escapeHtml(fee)}</span></div>
+        <div class="detailSummaryItem"><span class="summaryLabel">예약</span><span class="summaryValue">${escapeHtml(reserve)}</span></div>
+      </div>
+      <div class="drawerInfo">
+        <div class="drawerInfoRow"><span>기본 정보</span><b>${escapeHtml(getAreaGroup(f.district))} · ${escapeHtml(f.district || "-")} · ${escapeHtml(f.category || "-")}</b></div>
+        <div class="drawerInfoRow">
+          <span>주소 <button class="inlineCopyBtn" onclick="copyTextValue('${escapeAttr(address)}','주소')">복사</button></span>
+          <b>${escapeHtml(address)}</b>
+        </div>
+        <div class="drawerInfoRow">
+          <span>전화 <button class="inlineCopyBtn" onclick="copyTextValue('${escapeAttr(phone)}','전화번호')">복사</button></span>
+          <b>${escapeHtml(phone)}</b>
+        </div>
+      </div>
+      <div class="drawerActions">
+        <button onclick="promoteRelatedFacility(${Number(f.id)})">이 시설을 메인으로 보기</button>
+        <button class="secondary" onclick="closeRelatedDrawer()">닫기</button>
+      </div>
     </div>
   `;
 }
@@ -1753,10 +2006,15 @@ function previewRelatedFacility(id){
   if(!drawer) return;
   drawer.innerHTML=drawerFacilityHtml(preview);
   drawer.classList.remove("hidden");
+  drawer.onclick=(e)=>{ if(e.target===drawer) closeRelatedDrawer(); };
 }
 function closeRelatedDrawer(){
   const drawer=document.getElementById("relatedDrawer");
-  if(drawer) drawer.classList.add("hidden");
+  if(drawer){
+    drawer.classList.add("hidden");
+    drawer.innerHTML="";
+    drawer.onclick=null;
+  }
 }
 function promoteRelatedFacility(id){
   const f=facilities.find(x=>Number(x.id)===Number(id));
@@ -1771,6 +2029,9 @@ function promoteRelatedFacility(id){
 function showSingleFacility(id){
   previewRelatedFacility(id);
 }
+document.addEventListener("keydown", (e)=>{
+  if(e.key === "Escape") closeRelatedDrawer();
+});
 function applyManualFilters(){
   const d=document.getElementById("districtFilter").value;
   const c=document.getElementById("categoryFilter").value;
