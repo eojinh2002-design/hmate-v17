@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>H-MATE | 표시 안정화 v29-1</title>
+<title>H-MATE | 관련시설 복사 UX v29-1.1</title>
 <style>
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css");
 :root {
@@ -882,6 +882,24 @@ button{cursor:pointer}
   word-break:keep-all;
   overflow-wrap:anywhere;
 }
+.drawerCopyBtn{
+  position:static;
+  height:26px;
+  padding:0 9px;
+  border:1px solid #ffe0c7;
+  border-radius:999px;
+  background:#fff7f0;
+  color:#ff5a00;
+  font-size:11px;
+  font-weight:950;
+  line-height:24px;
+  cursor:pointer;
+  white-space:nowrap;
+}
+.drawerCopyBtn:hover{
+  background:#fff1e6;
+  border-color:#ffc59f;
+}
 .drawerActions{
   display:grid;
   grid-template-columns:1fr;
@@ -906,6 +924,11 @@ button{cursor:pointer}
   .inlineCopyBtn{
     right:8px;
     padding:0 8px;
+  }
+.drawerCopyBtn{
+    height:25px;
+    padding:0 8px;
+    font-size:10.5px;
   }
 }
 
@@ -1129,6 +1152,14 @@ function copyTextValue(value, label="정보"){
   }).catch(()=>{
     showToast("복사에 실패했습니다. 직접 선택해서 복사해주세요.");
   });
+}
+
+function buildMapSearchLink(f){
+  const address = String(f?.address || "").trim();
+  const name = String(f?.name || "").trim();
+  const query = [address && address !== "주소 정보 없음" ? address : "", name].filter(Boolean).join(" ");
+  if(!query) return "";
+  return `https://map.naver.com/v5/search/${encodeURIComponent(query)}`;
 }
 
 
@@ -1914,6 +1945,7 @@ function detailHtml(f,result){
   const reserve = f.reservable ? "예약 확인 필요" : "별도 확인";
   const address = f.address || "주소 정보 없음";
   const phone = f.phone || "확인 필요";
+  const mapLink = buildMapSearchLink(f);
   return `
     <div class="detailGrid">
       <div class="detailBox mainDetailBox">
@@ -2004,6 +2036,7 @@ function drawerFacilityHtml(f){
   const reserve = f.reservable ? "예약 확인 필요" : "별도 확인";
   const address = f.address || "주소 정보 없음";
   const phone = f.phone || "확인 필요";
+  const mapLink = buildMapSearchLink(f);
   return `
     <div class="relatedSheet" onclick="event.stopPropagation()">
       <div class="drawerTop">
@@ -2022,11 +2055,15 @@ function drawerFacilityHtml(f){
       <div class="drawerInfo">
         <div class="drawerInfoRow"><span>기본 정보</span><b>${escapeHtml(getAreaGroup(f.district))} · ${escapeHtml(f.district || "-")} · ${escapeHtml(f.category || "-")}</b></div>
         <div class="drawerInfoRow">
-          <span>주소 <button class="inlineCopyBtn" onclick="copyTextValue('${escapeAttr(address)}','주소')">복사</button></span>
+          <span>주소 <button class="drawerCopyBtn" onclick="copyTextValue('${escapeAttr(address)}','주소')">복사</button></span>
           <b>${escapeHtml(address)}</b>
         </div>
         <div class="drawerInfoRow">
-          <span>전화 <button class="inlineCopyBtn" onclick="copyTextValue('${escapeAttr(phone)}','전화번호')">복사</button></span>
+          <span>지도 링크 <button class="drawerCopyBtn" onclick="copyTextValue('${escapeAttr(mapLink)}','지도 링크')">복사</button></span>
+          <b>${escapeHtml(mapLink ? "네이버지도 검색 링크" : "지도 링크 없음")}</b>
+        </div>
+        <div class="drawerInfoRow">
+          <span>전화 <button class="drawerCopyBtn" onclick="copyTextValue('${escapeAttr(phone)}','전화번호')">복사</button></span>
           <b>${escapeHtml(phone)}</b>
         </div>
       </div>
