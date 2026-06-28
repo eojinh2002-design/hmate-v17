@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>H-MATE | 시민 맞춤 추천 v23</title>
+<title>H-MATE | 2단계 AI 판단 v25</title>
 <style>
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css");
 :root {
@@ -1117,6 +1117,36 @@ function renderScopePanel(scope){
   `;
 }
 
+
+function renderAiGuidancePanel(data){
+  const suggestions = data.suggestions && data.suggestions.length ? data.suggestions : ["도서관 추천","공원 추천","체육시설 추천"];
+  const titleMap = {
+    db_gap:"현재 DB로는 바로 추천하기 어려운 요청이에요",
+    out_of_scope:"H-MATE의 추천 범위를 벗어난 요청이에요",
+    clarify:"조금 더 구체적으로 알려주세요"
+  };
+  const title = titleMap[data.responseType] || "안내";
+  if(!document.getElementById("infoBody")) return;
+  document.getElementById("infoBody").innerHTML = `
+    <div class="scopeBox">
+      <span class="scopeLabel">H:AI 판단 결과</span>
+      <h3>${escapeHtml(title)}</h3>
+      <p>${data.answer || "현재 보유한 화성시 시설 DB 기준으로는 바로 추천하기 어려워요."}</p>
+      <div class="scopeGrid">
+        ${suggestions.slice(0,3).map(s=>`
+          <button class="scopeOption" onclick="quickAsk('${escapeAttr(s)}')">
+            <b>${escapeHtml(s)}</b>
+            <span>이 조건으로 다시 찾아보기</span>
+          </button>
+        `).join("")}
+      </div>
+      <div class="scopeNotice">
+        H-MATE는 AI가 먼저 의도를 판단한 뒤, 현재 등록된 화성시 시설 DB 안에서만 추천합니다. DB에 없는 정보는 임의로 만들어 안내하지 않습니다.
+      </div>
+    </div>
+  `;
+}
+
 function startRecommendation(){
   const input=document.getElementById("mainInput");
   const q=input.value.trim();
@@ -1137,15 +1167,6 @@ function followUp(){
 }
 async function runRecommend(query, resetFilters=false){
   addBubble(query, "user");
-
-  const scopeGuard = buildScopeGuard(query);
-  if(scopeGuard){
-    addBubble(scopeGuard.answer, "ai");
-    setQuickChips(scopeGuard.chips || resultQuickChips, "이어서 선택해볼 수 있어요", "result");
-    renderScopePanel(scopeGuard);
-    updateLocationUI();
-    return;
-  }
 
   const apiResult = await requestAiApi(query, resetFilters);
   if(apiResult){
