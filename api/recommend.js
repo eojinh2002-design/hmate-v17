@@ -7,7 +7,10 @@ const areaGroups = JSON.parse(fs.readFileSync(path.join(process.cwd(), "data", "
 const districtCoords = JSON.parse(fs.readFileSync(path.join(process.cwd(), "data", "districtCoords.json"), "utf-8"));
 const adjacentGroups = JSON.parse(fs.readFileSync(path.join(process.cwd(), "data", "adjacentGroups.json"), "utf-8"));
 
-function unique(arr){ return [...new Set(arr.filter(Boolean))]; }
+function unique(arr){ return [...new Set((arr || []).filter(Boolean))]; }
+function getAllCategories(){ return unique(facilities.map(f => f.category)).sort(); }
+function getAllDistricts(){ return unique(facilities.map(f => f.district)).sort(); }
+
 function getAreaGroup(district){
   for(const [group, ds] of Object.entries(areaGroups)){
     if(ds.includes(district)) return group;
@@ -49,6 +52,7 @@ function locationScore(f,userContext){
   if(meta.type === "gpsFar") return 8;
   return 0;
 }
+
 function analyzeQuery(query){
   const q = String(query || "").replace(/\s/g,"");
   const categories = [];
@@ -62,12 +66,13 @@ function analyzeQuery(query){
     {words:["공원","산책","걷기","자연","맨발"], cats:["공원시설","어린이공원","맨발산책로"], tokens:["공원","산책","걷기","자연","맨발"]},
     {words:["대관","회의","강당","세미나","모임","공간"], cats:["공공시설","문화시설","복지시설","도서관"], tokens:["대관","회의실","강당","공간","다목적"]},
     {words:["문화","공연","행사","축제","전시","데이트"], cats:["문화시설","공연행사","프로그램","공원시설"], tokens:["문화","공연","행사","축제","전시"]},
-    {words:["복지","상담","어르신","노인"], cats:["복지시설","공공시설"], tokens:["복지","상담","어르신","노인"]}
+    {words:["복지","상담","어르신","노인"], cats:["복지시설","공공시설"], tokens:["복지","상담","어르신","노인"]},
+    {words:["더워","덥","시원","무더위","폭염","그늘"], cats:["도서관","문화시설","공공시설","복지시설"], tokens:["도서관","문화시설","실내","쉼터","휴식"]}
   ];
   rules.forEach(r=>{
     if(r.words.some(w=>q.includes(w))){ categories.push(...r.cats); tokens.push(...r.tokens); }
   });
-  unique(facilities.map(f=>f.district)).forEach(d=>{ if(d && q.includes(d.replace(/\s/g,""))) districts.push(d); });
+  getAllDistricts().forEach(d=>{ if(d && q.includes(d.replace(/\s/g,""))) districts.push(d); });
   Object.keys(areaGroups).forEach(group=>{
     const key = group.replace("권","").replace(/·/g,"");
     if(q.includes(key)) districts.push(group);
@@ -79,24 +84,27 @@ function analyzeQuery(query){
     tokens:unique(tokens),
     districts:unique(districts),
     lowCrowd:q.includes("혼잡")||q.includes("한산")||q.includes("여유"),
-    indoor:q.includes("실내")||q.includes("비"),
+    indoor:q.includes("실내")||q.includes("비")||q.includes("더워")||q.includes("덥")||q.includes("시원")||q.includes("무더위")||q.includes("폭염"),
     reservable:q.includes("예약"),
-    near:q.includes("근처")||q.includes("가까")||q.includes("주변")||q.includes("내위치")||q.includes("현재위치")
+    near:q.includes("근처")||q.includes("가까")||q.includes("주변")||q.includes("내위치")||q.includes("현재위치"),
+    freePreferred:q.includes("무료")||q.includes("돈")||q.includes("요금")
   };
 }
 function scoreFacility(f,intent,userContext){
   const text=[f.name,f.category,f.subCategory,f.district,f.space,f.address,f.fee,...(f.keywords||[])].join(" ");
   let score=0;
-  intent.tokens.forEach(t=>{ if(text.includes(t)) score += 27; });
-  if(intent.categories.includes(f.category)) score += 32;
+  intent.tokens.forEach(t=>{ if(text.includes(t)) score += 24; });
+  if(intent.categories.includes(f.category)) score += 46;
+  if(intent.avoidCategories?.includes(f.category)) score -= 48;
   intent.districts.forEach(d=>{
     if(text.includes(d)) score += 38;
     if(areaGroups[d]?.includes(f.district)) score += 40;
   });
   if(intent.lowCrowd && f.crowd==="여유") score += 20;
-  if(intent.indoor && !["공원시설","어린이공원","맨발산책로"].includes(f.category)) score += 10;
+  if(intent.indoor && !["공원시설","어린이공원","맨발산책로","물놀이장"].includes(f.category)) score += 22;
+  if(intent.indoor && ["공원시설","어린이공원","맨발산책로"].includes(f.category)) score -= 18;
   if(intent.reservable && f.reservable) score += 12;
-  if(f.fee && String(f.fee).includes("무료")) score += 4;
+  if(intent.freePreferred && f.fee && String(f.fee).includes("무료")) score += 10;
   score += locationScore(f,userContext);
   return score;
 }
@@ -120,14 +128,32 @@ function buildReasons(f,intent,userContext){
   if(!reasons.length) reasons.push("입력한 목적과 시설 키워드가 일치합니다.");
   return reasons.slice(0,4);
 }
-function makeCandidates(message,userContext){
-  const intent = analyzeQuery(message);
+function searchFacilitiesFromAnalysis(message, analysis, userContext){
+  const fallbackIntent = analyzeQuery(message);
+  const categories = unique([...(analysis.targetCategories || []), ...(!analysis.targetCategories?.length ? fallbackIntent.categories : [])]);
+  const tokens = unique([...(analysis.keywords || []), ...(!analysis.keywords?.length ? fallbackIntent.tokens : [])]);
+  const districts = unique([...(analysis.targetDistricts || []), ...fallbackIntent.districts]);
+  const constraints = analysis.constraints || {};
+  const intent = {
+    raw: message,
+    categories,
+    tokens,
+    districts,
+    avoidCategories: analysis.avoidCategories || [],
+    lowCrowd: Boolean(constraints.lowCrowd || fallbackIntent.lowCrowd),
+    indoor: Boolean(constraints.indoor || fallbackIntent.indoor),
+    reservable: Boolean(constraints.reservable || fallbackIntent.reservable),
+    near: Boolean(constraints.near || fallbackIntent.near),
+    freePreferred: Boolean(constraints.freePreferred || fallbackIntent.freePreferred)
+  };
+
   const scored = facilities
     .map(f=>({...f,_score:scoreFacility(f,intent,userContext), areaGroup:getAreaGroup(f.district), locationMeta:getLocationMeta(f,userContext)}))
     .filter(f=>f._score>0)
     .sort((a,b)=>b._score-a._score)
-    .slice(0,16);
-  return {intent,candidates:scored};
+    .slice(0,18);
+
+  return {intent, candidates:scored};
 }
 function buildRelated(recs,intent,userContext){
   if(!recs.length) return [];
@@ -190,18 +216,191 @@ function contextFacts(message, f, userContext){
   };
 }
 function fallback(message,userContext){
-  const {intent,candidates} = makeCandidates(message,userContext);
+  const localIntent = analyzeQuery(message);
+  const {intent,candidates} = searchFacilitiesFromAnalysis(message, {
+    requestType:"recommend",
+    targetCategories:localIntent.categories,
+    targetDistricts:localIntent.districts,
+    keywords:localIntent.tokens,
+    avoidCategories:[],
+    constraints:{
+      lowCrowd:localIntent.lowCrowd,
+      indoor:localIntent.indoor,
+      reservable:localIntent.reservable,
+      near:localIntent.near,
+      freePreferred:localIntent.freePreferred
+    }
+  }, userContext);
+
   const recs = candidates.slice(0,3).map(f=>enrich(f,userContext,buildReasons(f,intent,userContext)));
   const related = buildRelated(recs,intent,userContext);
+
+  if(!recs.length){
+    return {
+      mode:"system_fallback",
+      responseType:"db_gap",
+      answer:"현재 H-MATE 시설 DB만으로는 바로 추천하기 어려운 요청이에요. 공원, 도서관, 체육시설, 문화시설, 대관 공간처럼 등록된 화성시 공공시설 범위 안에서 다시 물어보시면 더 정확히 안내드릴게요.",
+      summary:"현재 DB에서 직접 추천 가능한 후보가 없습니다.",
+      intent,
+      recommendations:[],
+      related:[],
+      suggestions:["도서관 추천","공원 추천","체육시설 추천"]
+    };
+  }
+
   return {
     mode:"system_fallback",
-    answer: recs.length ? `요청하신 조건에 맞춰 화성시 시설 DB에서 ${recs.length}곳을 추천드릴게요. API 키가 없어 시스템 추천으로 표시합니다.` : "조건에 맞는 시설을 찾기 어려워요.",
-    summary: "AI API 연결 전이라 목적·위치 기반 시스템 추천으로 처리했습니다.",
+    responseType:"recommend",
+    answer:`요청하신 조건에 맞춰 화성시 시설 DB에서 ${recs.length}곳을 추천드릴게요. 가장 먼저 볼 곳은 ${recs[0].name}입니다.`,
+    summary:"화성시 시설 DB를 기준으로 목적과 위치를 반영해 추천했습니다.",
     intent,
     recommendations: recs,
     related,
-    suggestions:["현재 위치랑 얼마나 멀어?","운영시간 알려줘","예약해야 해?"]
+    suggestions:["현재 위치와 거리","운영시간","예약 여부"]
   };
+}
+
+function usageFromResponse(response){
+  return response?.usage || null;
+}
+
+async function analyzeIntentWithAI(client, {message, userContext, selected, context, history}){
+  const response = await client.responses.create({
+    model: process.env.OPENAI_MODEL || "gpt-5-mini",
+    input: [
+      {
+        role:"system",
+        content:[
+          "너는 H-MATE의 1차 의도 분석 AI다.",
+          "사용자 문장을 키워드 하나로 단순 분류하지 말고, 문장 전체의 상황·목적·제약을 해석한다.",
+          "H-MATE는 화성시 공공시설/생활서비스 추천 서비스이며, 추천은 반드시 서버가 보유한 시설 DB 안에서만 이루어진다.",
+          "식당·카페·맛집처럼 민간 상업시설은 현재 DB 범위 밖이다.",
+          "공공화장실처럼 공공서비스 성격은 있으나 DB에 전용 데이터가 없을 수 있다. 이 경우 db_gap으로 분류한다.",
+          "복합 질문이면 compare로 분류할 수 있다. 예: 운동할까 책 읽을까.",
+          "애매한 질문이면 clarify로 분류한다.",
+          "답변 문장은 answerGuidance에 짧고 자연스럽게 작성한다.",
+          "없는 운영시간, 요금, 위치를 지어내지 않는다."
+        ].join("\\n")
+      },
+      {
+        role:"user",
+        content: JSON.stringify({
+          user_message: message,
+          recent_history: history.slice(-8),
+          user_location_context: userContext,
+          selected_facility_fact: context,
+          selected_facility_name: selected?.name || null,
+          available_facility_categories: getAllCategories(),
+          registered_districts: getAllDistricts(),
+          area_groups: Object.keys(areaGroups),
+          current_db_limits: [
+            "식당/카페/맛집/음식점 전용 DB 없음",
+            "공공화장실 전용 DB 없음",
+            "시설별 운영시간/요금/예약 정보는 일부 확인 필요일 수 있음"
+          ]
+        }, null, 2)
+      }
+    ],
+    text:{
+      format:{
+        type:"json_schema",
+        name:"hmate_intent_analysis",
+        strict:true,
+        schema:{
+          type:"object",
+          additionalProperties:false,
+          properties:{
+            requestType:{type:"string", enum:["recommend","compare","answer_selected","clarify","db_gap","out_of_scope"]},
+            mainIntent:{type:"string"},
+            userSituation:{type:"array", maxItems:6, items:{type:"string"}},
+            targetCategories:{type:"array", maxItems:6, items:{type:"string"}},
+            avoidCategories:{type:"array", maxItems:6, items:{type:"string"}},
+            targetDistricts:{type:"array", maxItems:6, items:{type:"string"}},
+            keywords:{type:"array", maxItems:10, items:{type:"string"}},
+            canRecommend:{type:"boolean"},
+            missingData:{type:"array", maxItems:6, items:{type:"string"}},
+            constraints:{
+              type:"object",
+              additionalProperties:false,
+              properties:{
+                near:{type:"boolean"},
+                indoor:{type:"boolean"},
+                lowCrowd:{type:"boolean"},
+                reservable:{type:"boolean"},
+                freePreferred:{type:"boolean"}
+              },
+              required:["near","indoor","lowCrowd","reservable","freePreferred"]
+            },
+            strategy:{type:"string"},
+            answerGuidance:{type:"string"},
+            followUpSuggestions:{type:"array", maxItems:3, items:{type:"string"}}
+          },
+          required:["requestType","mainIntent","userSituation","targetCategories","avoidCategories","targetDistricts","keywords","canRecommend","missingData","constraints","strategy","answerGuidance","followUpSuggestions"]
+        }
+      }
+    }
+  });
+  return {analysis: JSON.parse(response.output_text), usage: usageFromResponse(response)};
+}
+
+async function finalCuratorWithAI(client, payload){
+  const response = await client.responses.create({
+    model: process.env.OPENAI_MODEL || "gpt-5-mini",
+    input: [
+      {
+        role:"system",
+        content:[
+          "너는 화성시민을 위한 AI 공공서비스 큐레이터 H-MATE다.",
+          "1차 의도 분석 결과와 서버가 찾은 candidate_facilities를 바탕으로 최종 답변을 작성한다.",
+          "추천은 반드시 candidate_facilities 또는 selected_facility_fact 안의 시설만 사용한다.",
+          "candidate_facilities가 비어 있으면 시설을 지어내지 말고 db_gap 또는 clarify로 답한다.",
+          "사용자가 비교 질문을 했다면 compare로 답하고, 후보 시설 중에서 선택지를 비교해준다.",
+          "없는 시설명, 없는 주소, 없는 전화번호, 없는 운영시간, 없는 요금을 지어내지 않는다.",
+          "운영시간, 요금, 예약 정보가 없으면 '확인 필요'라고 말한다.",
+          "거리 정보는 제공된 locationMeta/facts만 사용한다. gps 거리는 읍면동 대표좌표 기준의 대략값이라고 설명한다.",
+          "응답은 한국어로 친절하고 짧게 작성한다."
+        ].join("\\n")
+      },
+      {
+        role:"user",
+        content: JSON.stringify(payload, null, 2)
+      }
+    ],
+    text:{
+      format:{
+        type:"json_schema",
+        name:"hmate_curator_response",
+        strict:true,
+        schema:{
+          type:"object",
+          additionalProperties:false,
+          properties:{
+            responseType:{type:"string", enum:["recommend","compare","answer_selected","clarify","db_gap","out_of_scope"]},
+            answer:{type:"string"},
+            summary:{type:"string"},
+            recommendedIds:{type:"array", maxItems:3, items:{type:"integer"}},
+            selectedFacilityId:{type:["integer","null"]},
+            reasonItems:{
+              type:"array",
+              maxItems:3,
+              items:{
+                type:"object",
+                additionalProperties:false,
+                properties:{
+                  id:{type:"integer"},
+                  reasons:{type:"array", maxItems:4, items:{type:"string"}}
+                },
+                required:["id","reasons"]
+              }
+            },
+            followUpSuggestions:{type:"array", maxItems:3, items:{type:"string"}}
+          },
+          required:["responseType","answer","summary","recommendedIds","selectedFacilityId","reasonItems","followUpSuggestions"]
+        }
+      }
+    }
+  });
+  return {parsed: JSON.parse(response.output_text), usage: usageFromResponse(response)};
 }
 
 export default async function handler(req,res){
@@ -216,91 +415,101 @@ export default async function handler(req,res){
     return;
   }
 
-  const selected = referencedFacility(message, selectedFacilityId, lastRecommendationIds, lastRelatedIds);
-  const followup = isFollowup(message);
-  const context = followup ? contextFacts(message, selected, userContext) : null;
-  const {intent,candidates} = makeCandidates(message,userContext);
-  const candidateView = candidates.map(f=>({
-    id:f.id, name:f.name, category:f.category, subCategory:f.subCategory,
-    district:f.district, areaGroup:f.areaGroup, address:f.address,
-    phone:f.phone, hours:f.hours, fee:f.fee, crowd:f.crowd, reservable:f.reservable,
-    locationMeta:f.locationMeta, keywords:(f.keywords||[]).slice(0,8)
-  }));
-
   if(!process.env.OPENAI_API_KEY){
     res.status(200).json(fallback(message,userContext));
     return;
   }
 
+  const selected = referencedFacility(message, selectedFacilityId, lastRecommendationIds, lastRelatedIds);
+  const followup = isFollowup(message);
+  const context = followup ? contextFacts(message, selected, userContext) : null;
+
   try{
     const client = new OpenAI({apiKey: process.env.OPENAI_API_KEY});
-    const response = await client.responses.create({
-      model: process.env.OPENAI_MODEL || "gpt-5.5",
-      input: [
-        {
-          role:"system",
-          content:[
-            "너는 화성시민을 위한 AI 공공서비스 큐레이터 H-MATE다.",
-            "사용자의 자연어를 이해하고, 위치 기준과 화성시 시설 DB를 바탕으로 답한다.",
-            "시설 추천은 반드시 candidate_facilities 또는 selected_facility_fact 안의 시설만 사용한다.",
-            "없는 시설명, 없는 주소, 없는 전화번호, 없는 운영시간을 지어내지 않는다.",
-            "거리 정보는 제공된 locationMeta/facts만 사용한다. gps 거리도 읍면동 대표좌표 기준의 대략값이라고 설명한다.",
-            "응답은 한국어로 친절하고 짧게 작성한다."
-          ].join("\\n")
+
+    const {analysis, usage: intentUsage} = await analyzeIntentWithAI(client, {message, userContext, selected, context, history});
+
+    // AI가 먼저 판단한 결과가 추천 불가/질문 보강이면 DB 검색 전에 바로 안내한다.
+    if(!analysis.canRecommend || ["clarify","db_gap","out_of_scope"].includes(analysis.requestType)){
+      res.status(200).json({
+        mode:"ai",
+        responseType:analysis.requestType,
+        answer:analysis.answerGuidance,
+        summary:analysis.strategy || analysis.mainIntent,
+        intent:{
+          raw:message,
+          categories:analysis.targetCategories || [],
+          tokens:analysis.keywords || [],
+          districts:analysis.targetDistricts || [],
+          lowCrowd:Boolean(analysis.constraints?.lowCrowd),
+          indoor:Boolean(analysis.constraints?.indoor),
+          reservable:Boolean(analysis.constraints?.reservable),
+          near:Boolean(analysis.constraints?.near),
+          freePreferred:Boolean(analysis.constraints?.freePreferred),
+          missingData:analysis.missingData || []
         },
-        {
-          role:"user",
-          content: JSON.stringify({
-            user_message: message,
-            recent_history: history.slice(-8),
-            user_location_context: userContext,
-            is_followup: followup,
-            selected_facility_fact: context,
-            interpreted_intent: intent,
-            candidate_facilities: candidateView
-          }, null, 2)
-        }
-      ],
-      text:{
-        format:{
-          type:"json_schema",
-          name:"hmate_ai_location_response",
-          strict:true,
-          schema:{
-            type:"object",
-            additionalProperties:false,
-            properties:{
-              responseType:{type:"string", enum:["recommend","answer_selected","clarify"]},
-              answer:{type:"string"},
-              summary:{type:"string"},
-              recommendedIds:{type:"array", maxItems:3, items:{type:"integer"}},
-              selectedFacilityId:{type:["integer","null"]},
-              reasons:{
-                type:"object",
-                additionalProperties:{type:"array", maxItems:4, items:{type:"string"}}
-              },
-              followUpSuggestions:{type:"array", maxItems:3, items:{type:"string"}}
-            },
-            required:["responseType","answer","summary","recommendedIds","selectedFacilityId","reasons","followUpSuggestions"]
-          }
-        }
-      }
+        selectedFacility:null,
+        recommendations:[],
+        related:[],
+        suggestions:analysis.followUpSuggestions?.length ? analysis.followUpSuggestions : ["도서관 추천","공원 추천","체육시설 추천"],
+        analysis,
+        usage:{intent:intentUsage, final:null}
+      });
+      return;
+    }
+
+    const {intent,candidates} = searchFacilitiesFromAnalysis(message, analysis, userContext);
+    const candidateView = candidates.map(f=>({
+      id:f.id, name:f.name, category:f.category, subCategory:f.subCategory,
+      district:f.district, areaGroup:f.areaGroup, address:f.address,
+      phone:f.phone, hours:f.hours, fee:f.fee, crowd:f.crowd, reservable:f.reservable,
+      locationMeta:f.locationMeta, keywords:(f.keywords||[]).slice(0,8)
+    }));
+
+    if(!candidateView.length && ["recommend","compare"].includes(analysis.requestType)){
+      res.status(200).json({
+        mode:"ai",
+        responseType:"db_gap",
+        answer:"요청하신 의도는 이해했지만, 현재 H-MATE 시설 DB에서 바로 추천할 수 있는 후보를 찾지 못했습니다. DB를 확장하면 더 정확히 안내할 수 있어요.",
+        summary:"AI 의도 분석 후 DB 후보가 부족한 상태입니다.",
+        intent,
+        selectedFacility:null,
+        recommendations:[],
+        related:[],
+        suggestions:analysis.followUpSuggestions?.length ? analysis.followUpSuggestions : ["도서관 추천","공원 추천","체육시설 추천"],
+        analysis,
+        usage:{intent:intentUsage, final:null}
+      });
+      return;
+    }
+
+    const {parsed, usage: finalUsage} = await finalCuratorWithAI(client, {
+      user_message: message,
+      recent_history: history.slice(-8),
+      user_location_context: userContext,
+      is_followup: followup,
+      selected_facility_fact: context,
+      intent_analysis: analysis,
+      candidate_facilities: candidateView
     });
 
-    const parsed = JSON.parse(response.output_text);
+    const reasonMap = Object.fromEntries((parsed.reasonItems || []).map(item => [String(item.id), item.reasons || []]));
     const candidateIds = new Set(candidates.map(f=>Number(f.id)));
-    let safeIds = (parsed.recommendedIds || []).filter(id=>candidateIds.has(Number(id))).slice(0,3);
 
-    if(parsed.responseType === "recommend" && safeIds.length === 0){
-      safeIds = candidates.slice(0,3).map(f=>Number(f.id));
+    let safeIds = [];
+    if(["recommend","compare"].includes(parsed.responseType)){
+      safeIds = (parsed.recommendedIds || []).filter(id=>candidateIds.has(Number(id))).slice(0,3);
+      if(safeIds.length === 0 && candidates.length){
+        safeIds = candidates.slice(0,3).map(f=>Number(f.id));
+      }
     }
 
     const recommendations = safeIds
       .map(id=>candidates.find(f=>Number(f.id)===Number(id)) || findFacilityById(id))
       .filter(Boolean)
-      .map(f=>enrich(f,userContext,parsed.reasons?.[String(f.id)] || buildReasons(f,intent,userContext)));
+      .map(f=>enrich(f,userContext,reasonMap[String(f.id)] || buildReasons(f,intent,userContext)));
 
-    const related = buildRelated(recommendations,intent,userContext);
+    const related = ["recommend","compare"].includes(parsed.responseType) ? buildRelated(recommendations,intent,userContext) : [];
 
     const selectedFacility = parsed.selectedFacilityId
       ? findFacilityById(parsed.selectedFacilityId)
@@ -308,13 +517,16 @@ export default async function handler(req,res){
 
     res.status(200).json({
       mode:"ai",
+      responseType: parsed.responseType,
       answer: parsed.answer,
       summary: parsed.summary,
       intent,
-      selectedFacility: selectedFacility ? enrich(selectedFacility,userContext,parsed.reasons?.[String(selectedFacility.id)] || []) : null,
+      selectedFacility: selectedFacility ? enrich(selectedFacility,userContext,reasonMap[String(selectedFacility.id)] || []) : null,
       recommendations,
       related,
-      suggestions: parsed.followUpSuggestions
+      suggestions: parsed.followUpSuggestions?.length ? parsed.followUpSuggestions : ["현재 위치와 거리","운영시간","예약 여부"],
+      analysis,
+      usage:{intent:intentUsage, final:finalUsage}
     });
   }catch(err){
     console.error(err);
